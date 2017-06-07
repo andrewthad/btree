@@ -10,11 +10,16 @@ module Map.Mutable.BTree.Prim
   , insert
   , modifyWithM
   , new
+  , foldrWithKey
+  , toAscList
+  , fromList
   ) where
 
 import Prelude hiding (lookup)
-import Data.Primitive
+import Data.Primitive hiding (fromList)
 import Data.Primitive.MutVar
+import Control.Monad
+import Debug.Trace
 
 import Data.Primitive.PrimArray
 import Control.Monad.ST
@@ -37,8 +42,8 @@ new ::
   -> ST s (Map s k v)
 new degree = do
   szRef <- newMutVar 0
-  keys <- newPrimArray degree
-  values <- newPrimArray degree
+  keys <- newPrimArray (degree - 1)
+  values <- newPrimArray (degree - 1)
   let root = Node szRef keys (ContentsValues values)
   m <- newMutVar root
   return (Map m degree)
@@ -88,6 +93,71 @@ insert :: (Ord k, Prim k, Prim v)
   -> ST s ()
 insert m k v = modifyWithM m k (\_ -> return v) >> return ()
 
+-- | This is provided for completeness but is not something
+--   typically useful in producetion code.
+toAscList :: forall s k v. (Ord k, Prim k, Prim v)
+  => Map s k v
+  -> ST s [(k,v)]
+toAscList = foldrWithKey f []
+  where
+  f :: k -> v -> [(k,v)] -> ST s [(k,v)]
+  f k v xs = return ((k,v) : xs)
+
+fromList :: (Ord k, Prim k, Prim v) => Int -> [(k,v)] -> ST s (Map s k v)
+fromList degree xs = do
+  m <- new degree
+  forM_ xs $ \(k,v) -> do
+    insert m k v
+  return m
+
+foldrWithKey :: forall s k v b. (Ord k, Prim k, Prim v)
+  => (k -> v -> b -> ST s b)
+  -> b
+  -> Map s k v
+  -> ST s b
+foldrWithKey f b0 (Map rootRef _) = readMutVar rootRef >>= flip go b0 
+  where
+  go :: Node s k v -> b -> ST s b
+  go (Node szRef keys c) b = do
+    sz <- readMutVar szRef
+    case c of
+      ContentsValues values -> foldrPrimArrayPairs sz f b keys values
+      ContentsNodes nodes -> foldrArray (sz + 1) go b nodes
+
+foldrArray :: forall s a b.
+     Int -- ^ length of array
+  -> (a -> b -> ST s b)
+  -> b
+  -> MutableArray s a
+  -> ST s b
+foldrArray len f b0 arr = go (len - 1) b0
+  where
+  go :: Int -> b -> ST s b
+  go !ix !b1 = if ix >= 0
+    then do
+      a <- readArray arr ix
+      b2 <- f a b1
+      go (ix - 1) b2
+    else return b1
+
+foldrPrimArrayPairs :: forall s k v b. (Ord k, Prim k, Prim v)
+  => Int -- ^ length of arrays
+  -> (k -> v -> b -> ST s b)
+  -> b
+  -> MutablePrimArray s k
+  -> MutablePrimArray s v
+  -> ST s b
+foldrPrimArrayPairs len f b0 ks vs = go (len - 1) b0
+  where
+  go :: Int -> b -> ST s b
+  go !ix !b1 = if ix >= 0
+    then do
+      k <- readPrimArray ks ix
+      v <- readPrimArray vs ix
+      b2 <- f k v b1
+      go (ix - 1) b2
+    else return b1
+
 modifyWithM :: forall s k v. (Ord k, Prim k, Prim v)
   => Map s k v
   -> k
@@ -116,7 +186,7 @@ modifyWithM (Map rootRef degree) k alter = do
     case c of
       ContentsValues values -> do
         e <- findIndex keys k sz
-        case e of
+        case traceShowId e of
           Left gtIx -> do
             v <- alter Nothing
             if sz < degree - 1
@@ -127,6 +197,8 @@ modifyWithM (Map rootRef degree) k alter = do
                 unsafeInsertPrimArray sz gtIx v values
                 return (Ok v)
               else do
+                _ <- error "temporarily removed"
+                -- We do not have enough space. The node must be split.
                 let leftSize = div sz 2
                     rightSize = sz - leftSize
                     leftKeys = keys
@@ -165,6 +237,7 @@ modifyWithM (Map rootRef degree) k alter = do
             writePrimArray values ix v'
             return (Ok v')
       ContentsNodes nodes -> do
+        _ <- error "temporarily removed"
         e <- findIndex keys k sz
         case e of
           Right _ -> error "write Right case"
@@ -209,8 +282,6 @@ modifyWithM (Map rootRef degree) k alter = do
                       writeMutVar rightSzRef rightSize
                   return (Split (Node rightSzRef rightKeys (ContentsNodes rightNodes)) middleKey v)
                   
-        -- go =<< readArray nodes ix
-
 -- Preconditions:
 -- * marr is sorted low to high
 -- * sz is less than or equal to the true size of marr
@@ -271,6 +342,7 @@ unsafeInsertPrimArray ::
 unsafeInsertPrimArray sz i x marr = do
   copyMutablePrimArray marr (i + 1) marr i (sz - i)
   writePrimArray marr i x
+
 
 showPairs :: forall s k v. (Show k, Show v, Prim k, Prim v)
   => Int -- size
@@ -442,6 +514,15 @@ _ex9 = do
   insert m 42 99
   insert m 66 124
   return m
+
+_ex10 :: ST s (Map s Int Word)
+_ex10 = do
+  m <- new 6
+  -- insert m 1 1
+  -- insert m 2 2
+  -- insert m 3 1
+  return m
+
 
 _myArray :: Array Char
 _myArray = runST $ do
