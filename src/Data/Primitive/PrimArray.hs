@@ -24,11 +24,11 @@ data PrimArray = ByteArray ByteArray#
 -- | Mutable primitive arrays associated with a primitive state token
 data MutablePrimArray s a = MutablePrimArray (MutableByteArray# s)
 
-newPrimArray :: PrimMonad m => Int -> m (MutablePrimArray (PrimState m) a)
+newPrimArray :: forall m a. (PrimMonad m, Prim a) => Int -> m (MutablePrimArray (PrimState m) a)
 {-# INLINE newPrimArray #-}
 newPrimArray (I# n#)
   = primitive (\s# -> 
-      case newByteArray# n# s# of
+      case newByteArray# (n# *# sizeOf# (undefined :: a)) s# of
         (# s'#, arr# #) -> (# s'#, MutablePrimArray arr# #)
     )
 

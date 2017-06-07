@@ -13,13 +13,13 @@ module Map.Mutable.BTree.Prim
   , foldrWithKey
   , toAscList
   , fromList
+  , debugMap
   ) where
 
 import Prelude hiding (lookup)
 import Data.Primitive hiding (fromList)
 import Data.Primitive.MutVar
 import Control.Monad
-import Debug.Trace
 
 import Data.Primitive.PrimArray
 import Control.Monad.ST
@@ -37,10 +37,13 @@ data Contents s k v
   = ContentsValues !(MutablePrimArray s v)
   | ContentsNodes !(MutableArray s (Node s k v))
 
-new ::
-     Int -- ^ Max number of children per node
+new :: (Prim k, Prim v)
+  => Int -- ^ Max number of children per node
   -> ST s (Map s k v)
 new degree = do
+  if degree < 3
+    then error "Btree.new: max nodes per child cannot be less than 3"
+    else return ()
   szRef <- newMutVar 0
   keys <- newPrimArray (degree - 1)
   values <- newPrimArray (degree - 1)
@@ -186,7 +189,7 @@ modifyWithM (Map rootRef degree) k alter = do
     case c of
       ContentsValues values -> do
         e <- findIndex keys k sz
-        case traceShowId e of
+        case e of
           Left gtIx -> do
             v <- alter Nothing
             if sz < degree - 1
@@ -197,7 +200,6 @@ modifyWithM (Map rootRef degree) k alter = do
                 unsafeInsertPrimArray sz gtIx v values
                 return (Ok v)
               else do
-                _ <- error "temporarily removed"
                 -- We do not have enough space. The node must be split.
                 let leftSize = div sz 2
                     rightSize = sz - leftSize
@@ -237,50 +239,49 @@ modifyWithM (Map rootRef degree) k alter = do
             writePrimArray values ix v'
             return (Ok v')
       ContentsNodes nodes -> do
-        _ <- error "temporarily removed"
-        e <- findIndex keys k sz
-        case e of
-          Right _ -> error "write Right case"
-          Left gtIx -> do
-            node <- readArray nodes gtIx
-            ins <- go node
-            case ins of
-              Ok v -> return (Ok v)
-              Split rightNode propagated v -> if sz < degree - 1
+        (gtIx,isEq) <- findIndexGte keys k sz
+        -- case e of
+        --   Right _ -> error "write Right case"
+        --   Left gtIx -> do
+        node <- readArray nodes (if isEq then gtIx + 1 else gtIx)
+        ins <- go node
+        case ins of
+          Ok v -> return (Ok v)
+          Split rightNode propagated v -> if sz < degree - 1
+            then do
+              unsafeInsertPrimArray sz gtIx propagated keys
+              unsafeInsertArray (sz + 1) (gtIx + 1) rightNode nodes
+              writeMutVar szRef (sz + 1)
+              return (Ok v)
+            else do
+              let middleIx = div sz 2
+                  leftKeys = keys
+                  leftNodes = nodes
+              middleKey <- readPrimArray keys middleIx
+              rightKeys :: MutablePrimArray s k <- newPrimArray (degree - 1)
+              rightNodes <- newArray degree uninitializedNode
+              rightSzRef <- newMutVar 0 -- this always gets replaced
+              let leftSize = middleIx
+                  rightSize = sz - leftSize
+              if middleIx >= gtIx
                 then do
-                  unsafeInsertPrimArray sz gtIx propagated keys
-                  unsafeInsertArray (sz + 1) (gtIx + 1) rightNode nodes
-                  writeMutVar szRef (sz + 1)
-                  return (Ok v)
+                  copyMutablePrimArray rightKeys 0 leftKeys (leftSize + 1) (rightSize - 1)
+                  copyMutableArray rightNodes 0 leftNodes (leftSize + 1) rightSize
+                  unsafeInsertPrimArray leftSize gtIx propagated leftKeys
+                  unsafeInsertArray (leftSize + 1) (gtIx + 1) rightNode leftNodes
+                  writeMutVar szRef (leftSize + 1)
+                  writeMutVar rightSzRef (rightSize - 1)
                 else do
-                  let middleIx = div sz 2
-                      leftKeys = keys
-                      leftNodes = nodes
-                  middleKey <- readPrimArray keys middleIx
-                  rightKeys :: MutablePrimArray s k <- newPrimArray (degree - 1)
-                  rightNodes <- newArray degree uninitializedNode
-                  rightSzRef <- newMutVar 0 -- this always gets replaced
-                  let leftSize = middleIx
-                      rightSize = sz - leftSize
-                  if middleIx >= gtIx
-                    then do
-                      copyMutablePrimArray rightKeys 0 leftKeys (leftSize + 1) (rightSize - 1)
-                      copyMutableArray rightNodes 0 leftNodes (leftSize + 1) rightSize
-                      unsafeInsertPrimArray leftSize gtIx propagated leftKeys
-                      unsafeInsertArray (leftSize + 1) (gtIx + 1) rightNode leftNodes
-                      writeMutVar szRef (leftSize + 1)
-                      writeMutVar rightSzRef (rightSize - 1)
-                    else do
-                      -- Currently, we're copying from left to right and
-                      -- then doing another copy from right to right. We can do better.
-                      -- There is a similar note further up.
-                      copyMutablePrimArray rightKeys 0 leftKeys (leftSize + 1) (rightSize - 1)
-                      copyMutableArray rightNodes 0 leftNodes (leftSize + 1) rightSize
-                      unsafeInsertPrimArray (rightSize - 1) (gtIx - leftSize - 1) propagated rightKeys
-                      unsafeInsertArray rightSize (gtIx - leftSize) rightNode rightNodes
-                      writeMutVar szRef leftSize
-                      writeMutVar rightSzRef rightSize
-                  return (Split (Node rightSzRef rightKeys (ContentsNodes rightNodes)) middleKey v)
+                  -- Currently, we're copying from left to right and
+                  -- then doing another copy from right to right. We can do better.
+                  -- There is a similar note further up.
+                  copyMutablePrimArray rightKeys 0 leftKeys (leftSize + 1) (rightSize - 1)
+                  copyMutableArray rightNodes 0 leftNodes (leftSize + 1) rightSize
+                  unsafeInsertPrimArray (rightSize - 1) (gtIx - leftSize - 1) propagated rightKeys
+                  unsafeInsertArray rightSize (gtIx - leftSize) rightNode rightNodes
+                  writeMutVar szRef leftSize
+                  writeMutVar rightSzRef rightSize
+              return (Split (Node rightSzRef rightKeys (ContentsNodes rightNodes)) middleKey v)
                   
 -- Preconditions:
 -- * marr is sorted low to high
@@ -319,6 +320,22 @@ findIndex !marr !needle !sz = go 0
         GT -> return (Left i)
     else return (Left i)
 
+-- | The second value in the tuple is true when
+--   the index match was exact.
+findIndexGte :: forall s a. (Ord a, Prim a)
+  => MutablePrimArray s a -> a -> Int -> ST s (Int,Bool)
+findIndexGte !marr !needle !sz = go 0
+  where
+  go :: Int -> ST s (Int,Bool)
+  go !i = if i < sz
+    then do
+      a <- readPrimArray marr i
+      case compare a needle of
+        LT -> go (i + 1)
+        EQ -> return (i,True)
+        GT -> return (i,False)
+    else return (i,False)
+
 -- | Insert an element in the array, shifting the values right 
 --   of the index. The array size should be big enough for this
 --   shift, this is not checked.
@@ -332,6 +349,15 @@ unsafeInsertArray sz i x marr = do
   copyMutableArray marr (i + 1) marr i (sz - i)
   writeArray marr i x
 
+-- Inserts a value at the designated index,
+-- shifting everything after it to the right.
+--
+-- Example:
+-- -----------------------------
+-- | a | b | c | d | e | X | X |
+-- -----------------------------
+-- unsafeInsertPrimArray 5 3 'k' marr
+--
 unsafeInsertPrimArray ::
      Prim a
   => Int -- ^ Size of the original array
@@ -362,8 +388,10 @@ showPairs sz keys values = go 0
     else return []
 
 -- | Show the internal structure of a Map, useful for debugging, not exported
-_showMap :: forall s k v. (Prim k, Prim v, Show k, Show v) => Map s k v -> ST s String
-_showMap (Map rootRef _) = do
+debugMap :: forall s k v. (Prim k, Prim v, Show k, Show v)
+  => Map s k v
+  -> ST s String
+debugMap (Map rootRef _) = do
   Node rootSzRef rootKeys rootContents <- readMutVar rootRef
   rootSz <- readMutVar rootSzRef
   let go :: Int -> Int -> MutablePrimArray s k -> Contents s k v -> ST s [(Int,String)]
