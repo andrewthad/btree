@@ -19,7 +19,7 @@ import Data.Primitive
 import Control.Monad.Primitive
 
 -- | Primitive arrays
-data PrimArray = ByteArray ByteArray#
+data PrimArray a = ByteArray ByteArray#
 
 -- | Mutable primitive arrays associated with a primitive state token
 data MutablePrimArray s a = MutablePrimArray (MutableByteArray# s)
