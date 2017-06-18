@@ -1,0 +1,3 @@
+[submodule "compact-mutable"]
+	path = compact-mutable
+	url = https://github.com/andrewthad/compact-mutable.git
