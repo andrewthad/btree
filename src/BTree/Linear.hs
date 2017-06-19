@@ -2,10 +2,10 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE BangPatterns #-}
 
-{-# OPTIONS_GHC -Wall -Werror #-}
+{-# OPTIONS_GHC -Wall -Werror -fno-warn-unused-imports #-}
 
-module Map.Mutable.BTree.Prim
-  ( Node
+module BTree.Linear
+  ( BTree
   , Context(..)
   , lookup
   , insert
@@ -21,30 +21,27 @@ import Prelude hiding (lookup)
 import Data.Primitive hiding (fromList)
 import Data.Primitive.MutVar
 import Control.Monad
+import Data.Foldable (foldlM)
 
 import Data.Primitive.PrimArray
 import Control.Monad.ST
-
--- data Map s k v = Map
---   !(MutVar s (Node s k v)) -- The actual B Tree
---   !Int -- Degree of B Tree
 
 data Context s = Context
   { contextDegree :: {-# UNPACK #-} !Int
   }
 
-data Node s k v = Node
+data BTree s k v = BTree
   !(MutVar s Int) -- current number of keys in this node
   !(MutablePrimArray s k)
   !(Contents s k v)
 
 data Contents s k v
   = ContentsValues !(MutablePrimArray s v)
-  | ContentsNodes !(MutableArray s (Node s k v))
+  | ContentsNodes !(MutableArray s (BTree s k v))
 
 new :: (Prim k, Prim v)
   => Context s -- ^ Max number of children per node
-  -> ST s (Node s k v)
+  -> ST s (BTree s k v)
 new (Context degree) = do
   if degree < 3
     then error "Btree.new: max nodes per child cannot be less than 3"
@@ -52,14 +49,14 @@ new (Context degree) = do
   szRef <- newMutVar 0
   keys <- newPrimArray (degree - 1)
   values <- newPrimArray (degree - 1)
-  return (Node szRef keys (ContentsValues values))
+  return (BTree szRef keys (ContentsValues values))
 
 lookup :: forall s k v. (Ord k, Prim k, Prim v)
-  => Context s -> Node s k v -> k -> ST s (Maybe v)
+  => Context s -> BTree s k v -> k -> ST s (Maybe v)
 lookup (Context _) theNode k = go theNode
   where
-  go :: Node s k v -> ST s (Maybe v)
-  go (Node szRef keys c) = do
+  go :: BTree s k v -> ST s (Maybe v)
+  go (BTree szRef keys c) = do
     sz <- readMutVar szRef
     case c of
       ContentsValues values -> do
@@ -75,7 +72,7 @@ lookup (Context _) theNode k = go theNode
 
 data Insert s k v
   = Ok !v
-  | Split !(Node s k v) !k !v
+  | Split !(BTree s k v) !k !v
     -- ^ The new node that will go to the right,
     --   the key propagated to the parent,
     --   the inserted value.
@@ -83,29 +80,21 @@ data Insert s k v
 uninitializedNode :: a
 uninitializedNode = error "unitializedNode: this should not be forced, b+ tree implementation has a mistake."
 
--- minimumKey :: forall s k v. Prim k => Node s k v -> ST s k
--- minimumKey = go
---   where
---   go :: Node s k v -> ST s k
---   go (Node szRef keys c) = do
---     sz <- readMutVar szRef
---     case c of
---       ContentsValues _ -> readPrimArray keys 0
---       ContentsNodes nodes -> go =<< readArray nodes 0
-
 insert :: (Ord k, Prim k, Prim v)
   => Context s
-  -> Node s k v
+  -> BTree s k v
   -> k
   -> v
-  -> ST s ()
-insert ctx m k v = modifyWithM ctx m k (\_ -> return v) >> return ()
+  -> ST s (BTree s k v)
+insert ctx m k v = do
+  (_,node) <- modifyWithM ctx m k (\_ -> return v)
+  return node
 
 -- | This is provided for completeness but is not something
 --   typically useful in producetion code.
 toAscList :: forall s k v. (Ord k, Prim k, Prim v)
   => Context s
-  -> Node s k v
+  -> BTree s k v
   -> ST s [(k,v)]
 toAscList = foldrWithKey f []
   where
@@ -113,23 +102,24 @@ toAscList = foldrWithKey f []
   f k v xs = return ((k,v) : xs)
 
 fromList :: (Ord k, Prim k, Prim v)
-  => Context s -> [(k,v)] -> ST s (Node s k v)
+  => Context s -> [(k,v)] -> ST s (BTree s k v)
 fromList ctx xs = do
-  m <- new ctx
-  forM_ xs $ \(k,v) -> do
-    insert ctx m k v
-  return m
+  root0 <- new ctx
+  foldlM
+    (\root (k,v) -> do
+      insert ctx root k v
+    ) root0 xs
 
 foldrWithKey :: forall s k v b. (Ord k, Prim k, Prim v)
   => (k -> v -> b -> ST s b)
   -> b
   -> Context s
-  -> Node s k v
+  -> BTree s k v
   -> ST s b
 foldrWithKey f b0 (Context _) root = flip go b0 root
   where
-  go :: Node s k v -> b -> ST s b
-  go (Node szRef keys c) b = do
+  go :: BTree s k v -> b -> ST s b
+  go (BTree szRef keys c) b = do
     sz <- readMutVar szRef
     case c of
       ContentsValues values -> foldrPrimArrayPairs sz f b keys values
@@ -171,10 +161,10 @@ foldrPrimArrayPairs len f b0 ks vs = go (len - 1) b0
 
 modifyWithM :: forall s k v. (Ord k, Prim k, Prim v)
   => Context s
-  -> Node s k v
+  -> BTree s k v
   -> k
   -> (Maybe v -> ST s v)
-  -> ST s (v, Node s k v)
+  -> ST s (v, BTree s k v)
 modifyWithM (Context degree) root k alter = do
   ins <- go root
   case ins of
@@ -187,11 +177,11 @@ modifyWithM (Context degree) root k alter = do
       newRootChildren <- newArray degree uninitializedNode
       writeArray newRootChildren 0 leftNode
       writeArray newRootChildren 1 rightNode
-      let newRoot = Node newRootSz newRootKeys (ContentsNodes newRootChildren)
+      let newRoot = BTree newRootSz newRootKeys (ContentsNodes newRootChildren)
       return (v,newRoot)
   where
-  go :: Node s k v -> ST s (Insert s k v)
-  go (Node szRef keys c) = do
+  go :: BTree s k v -> ST s (Insert s k v)
+  go (BTree szRef keys c) = do
     sz <- readMutVar szRef
     case c of
       ContentsValues values -> do
@@ -223,7 +213,7 @@ modifyWithM (Context degree) root k alter = do
                     unsafeInsertPrimArray leftSize gtIx v leftValues
                     propagated <- readPrimArray rightKeys 0
                     writeMutVar szRef (leftSize + 1)
-                    return (Split (Node rightSzRef rightKeys (ContentsValues rightValues)) propagated v)
+                    return (Split (BTree rightSzRef rightKeys (ContentsValues rightValues)) propagated v)
                   else do
                     rightKeys <- newPrimArray (degree - 1)
                     rightValues <- newPrimArray (degree - 1)
@@ -239,7 +229,7 @@ modifyWithM (Context degree) root k alter = do
                     unsafeInsertPrimArray rightSize (gtIx - leftSize) v rightValues
                     propagated <- readPrimArray rightKeys 0
                     writeMutVar szRef leftSize
-                    return (Split (Node rightSzRef rightKeys (ContentsValues rightValues)) propagated v)
+                    return (Split (BTree rightSzRef rightKeys (ContentsValues rightValues)) propagated v)
           Right ix -> do
             v <- readPrimArray values ix
             v' <- alter (Just v)
@@ -288,7 +278,7 @@ modifyWithM (Context degree) root k alter = do
                   unsafeInsertArray rightSize (gtIx - leftSize) rightNode rightNodes
                   writeMutVar szRef leftSize
                   writeMutVar rightSzRef rightSize
-              return (Split (Node rightSzRef rightKeys (ContentsNodes rightNodes)) middleKey v)
+              return (Split (BTree rightSzRef rightKeys (ContentsNodes rightNodes)) middleKey v)
                   
 -- Preconditions:
 -- * marr is sorted low to high
@@ -397,9 +387,9 @@ showPairs sz keys values = go 0
 -- | Show the internal structure of a Map, useful for debugging, not exported
 debugMap :: forall s k v. (Prim k, Prim v, Show k, Show v)
   => Context s
-  -> Node s k v
+  -> BTree s k v
   -> ST s String
-debugMap (Context _) (Node rootSzRef rootKeys rootContents) = do
+debugMap (Context _) (BTree rootSzRef rootKeys rootContents) = do
   rootSz <- readMutVar rootSzRef
   let go :: Int -> Int -> MutablePrimArray s k -> Contents s k v -> ST s [(Int,String)]
       go level sz keys c = case c of
@@ -408,12 +398,12 @@ debugMap (Context _) (Node rootSzRef rootKeys rootContents) = do
           return (map (\s -> (level,s)) pairStrs)
         ContentsNodes nodes -> do
           pairs <- pairForM sz keys nodes
-            $ \k (Node nextSzRef nextKeys nextContents) -> do
+            $ \k (BTree nextSzRef nextKeys nextContents) -> do
               nextSz <- readMutVar nextSzRef
               nextStrs <- go (level + 1) nextSz nextKeys nextContents
               return (nextStrs ++ [(level,show k)]) -- ++ " (Size: " ++ show nextSz ++ ")")])
           -- I think this should always end up being in bounds
-          Node lastSzRef lastKeys lastContents <- readArray nodes sz
+          BTree lastSzRef lastKeys lastContents <- readArray nodes sz
           lastSz <- readMutVar lastSzRef
           lastStrs <- go (level + 1) lastSz lastKeys lastContents
           -- return (nextStrs ++ [(level,show k)])
@@ -438,4 +428,5 @@ pairForM sz marr1 marr2 f = go 0
       bs <- go (ix + 1)
       return (b : bs)
     else return []
+
 

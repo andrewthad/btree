@@ -20,7 +20,8 @@ import Data.Foldable
 
 import qualified Data.List as L
 import qualified Data.List.NonEmpty as NE
-import qualified Map.Mutable.BTree.Prim as B
+import qualified BTree as B
+import qualified BTree.Linear as BTL
 import qualified Data.Set as S
 import qualified Data.Primitive.PrimArray as P
 
@@ -61,7 +62,7 @@ unitTests = testGroup "Unit tests"
       let xs = [1,3,2,4,6,5 :: Word]
           xs' = map (\x -> (x,x)) xs
           e = runST $ runExceptT $ do
-            b <- lift $ B.fromList 20 xs'
+            b <- lift $ B.fromList (B.Context (BTL.Context 20)) xs'
             forM_ xs $ \k -> do
               mv <- lift $ B.lookup b k
               case mv of
@@ -91,7 +92,7 @@ unitTests = testGroup "Unit tests"
   , testCase "insertions are sorted" $ do
       let xs = [1,3,2,4,6,5,19,11,7 :: Word]
           xs' = map (\x -> (x,x)) xs
-      actual <- return (runST (B.fromList 4 xs' >>= B.toAscList))
+      actual <- return (runST (B.fromList (B.Context (BTL.Context 4)) xs' >>= B.toAscList))
       actual @?= S.toAscList (S.fromList xs')
   ]
 
@@ -106,7 +107,7 @@ ordering degree xs' =
   let xs = map getPositive xs'
       expected = map (\x -> (x,x)) $ S.toAscList $ S.fromList xs
       (actual,layout) = runST $ do
-        m <- B.new degree
+        m <- B.new (B.Context (BTL.Context degree))
         forM_ xs $ \x -> do
           B.insert m x x
         (,) <$> B.toAscList m <*> B.debugMap m

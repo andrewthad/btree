@@ -16,7 +16,10 @@ cabal-version: >=1.10
 library
   hs-source-dirs: src
   exposed-modules:
-    Map.Mutable.BTree.Prim
+    BTree
+    BTree.Linear
+    BTree.Generic
+    BTree.Array
   build-depends:
       base >= 4.7 && < 5
     , ghc-prim
