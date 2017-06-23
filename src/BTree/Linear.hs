@@ -25,6 +25,7 @@ import Data.Foldable (foldlM)
 
 import Data.Primitive.PrimArray
 import Control.Monad.ST
+import Control.Monad.Primitive
 
 data Context s = Context
   { contextDegree :: {-# UNPACK #-} !Int
@@ -92,13 +93,13 @@ insert ctx m k v = do
 
 -- | This is provided for completeness but is not something
 --   typically useful in producetion code.
-toAscList :: forall s k v. (Ord k, Prim k, Prim v)
-  => Context s
-  -> BTree s k v
-  -> ST s [(k,v)]
+toAscList :: forall m k v. (PrimMonad m, Ord k, Prim k, Prim v)
+  => Context (PrimState m)
+  -> BTree (PrimState m) k v
+  -> m [(k,v)]
 toAscList = foldrWithKey f []
   where
-  f :: k -> v -> [(k,v)] -> ST s [(k,v)]
+  f :: k -> v -> [(k,v)] -> m [(k,v)]
   f k v xs = return ((k,v) : xs)
 
 fromList :: (Ord k, Prim k, Prim v)
@@ -110,30 +111,30 @@ fromList ctx xs = do
       insert ctx root k v
     ) root0 xs
 
-foldrWithKey :: forall s k v b. (Ord k, Prim k, Prim v)
-  => (k -> v -> b -> ST s b)
+foldrWithKey :: forall m k v b. (PrimMonad m, Ord k, Prim k, Prim v)
+  => (k -> v -> b -> m b)
   -> b
-  -> Context s
-  -> BTree s k v
-  -> ST s b
+  -> Context (PrimState m)
+  -> BTree (PrimState m) k v
+  -> m b
 foldrWithKey f b0 (Context _) root = flip go b0 root
   where
-  go :: BTree s k v -> b -> ST s b
+  go :: BTree (PrimState m) k v -> b -> m b
   go (BTree szRef keys c) b = do
     sz <- readMutVar szRef
     case c of
       ContentsValues values -> foldrPrimArrayPairs sz f b keys values
       ContentsNodes nodes -> foldrArray (sz + 1) go b nodes
 
-foldrArray :: forall s a b.
-     Int -- ^ length of array
-  -> (a -> b -> ST s b)
+foldrArray :: forall m a b. (PrimMonad m)
+  => Int -- ^ length of array
+  -> (a -> b -> m b)
   -> b
-  -> MutableArray s a
-  -> ST s b
+  -> MutableArray (PrimState m) a
+  -> m b
 foldrArray len f b0 arr = go (len - 1) b0
   where
-  go :: Int -> b -> ST s b
+  go :: Int -> b -> m b
   go !ix !b1 = if ix >= 0
     then do
       a <- readArray arr ix
@@ -141,16 +142,16 @@ foldrArray len f b0 arr = go (len - 1) b0
       go (ix - 1) b2
     else return b1
 
-foldrPrimArrayPairs :: forall s k v b. (Ord k, Prim k, Prim v)
+foldrPrimArrayPairs :: forall m k v b. (PrimMonad m, Ord k, Prim k, Prim v)
   => Int -- ^ length of arrays
-  -> (k -> v -> b -> ST s b)
+  -> (k -> v -> b -> m b)
   -> b
-  -> MutablePrimArray s k
-  -> MutablePrimArray s v
-  -> ST s b
+  -> MutablePrimArray (PrimState m) k
+  -> MutablePrimArray (PrimState m) v
+  -> m b
 foldrPrimArrayPairs len f b0 ks vs = go (len - 1) b0
   where
-  go :: Int -> b -> ST s b
+  go :: Int -> b -> m b
   go !ix !b1 = if ix >= 0
     then do
       k <- readPrimArray ks ix
