@@ -24,7 +24,6 @@ import Control.Monad
 import Data.Foldable (foldlM)
 
 import Data.Primitive.PrimArray
-import Control.Monad.ST
 import Control.Monad.Primitive
 
 data Context s = Context
@@ -40,9 +39,9 @@ data Contents s k v
   = ContentsValues !(MutablePrimArray s v)
   | ContentsNodes !(MutableArray s (BTree s k v))
 
-new :: (Prim k, Prim v)
-  => Context s -- ^ Max number of children per node
-  -> ST s (BTree s k v)
+new :: (PrimMonad m, Prim k, Prim v)
+  => Context (PrimState m) -- ^ Max number of children per node
+  -> m (BTree (PrimState m) k v)
 new (Context degree) = do
   if degree < 3
     then error "Btree.new: max nodes per child cannot be less than 3"
@@ -52,11 +51,11 @@ new (Context degree) = do
   values <- newPrimArray (degree - 1)
   return (BTree szRef keys (ContentsValues values))
 
-lookup :: forall s k v. (Ord k, Prim k, Prim v)
-  => Context s -> BTree s k v -> k -> ST s (Maybe v)
+lookup :: forall m k v. (PrimMonad m, Ord k, Prim k, Prim v)
+  => Context (PrimState m) -> BTree (PrimState m) k v -> k -> m (Maybe v)
 lookup (Context _) theNode k = go theNode
   where
-  go :: BTree s k v -> ST s (Maybe v)
+  go :: BTree (PrimState m) k v -> m (Maybe v)
   go (BTree szRef keys c) = do
     sz <- readMutVar szRef
     case c of
@@ -81,12 +80,12 @@ data Insert s k v
 uninitializedNode :: a
 uninitializedNode = error "unitializedNode: this should not be forced, b+ tree implementation has a mistake."
 
-insert :: (Ord k, Prim k, Prim v)
-  => Context s
-  -> BTree s k v
+insert :: (PrimMonad m, Ord k, Prim k, Prim v)
+  => Context (PrimState m)
+  -> BTree (PrimState m) k v
   -> k
   -> v
-  -> ST s (BTree s k v)
+  -> m (BTree (PrimState m) k v)
 insert ctx m k v = do
   (_,node) <- modifyWithM ctx m k (\_ -> return v)
   return node
@@ -102,8 +101,8 @@ toAscList = foldrWithKey f []
   f :: k -> v -> [(k,v)] -> m [(k,v)]
   f k v xs = return ((k,v) : xs)
 
-fromList :: (Ord k, Prim k, Prim v)
-  => Context s -> [(k,v)] -> ST s (BTree s k v)
+fromList :: (PrimMonad m, Ord k, Prim k, Prim v)
+  => Context (PrimState m) -> [(k,v)] -> m (BTree (PrimState m) k v)
 fromList ctx xs = do
   root0 <- new ctx
   foldlM
@@ -160,12 +159,13 @@ foldrPrimArrayPairs len f b0 ks vs = go (len - 1) b0
       go (ix - 1) b2
     else return b1
 
-modifyWithM :: forall s k v. (Ord k, Prim k, Prim v)
+{-# INLINABLE modifyWithM #-}
+modifyWithM :: forall m s k v. (PrimMonad m, Ord k, Prim k, Prim v)
   => Context s
-  -> BTree s k v
+  -> BTree (PrimState m) k v
   -> k
-  -> (Maybe v -> ST s v)
-  -> ST s (v, BTree s k v)
+  -> (Maybe v -> m v)
+  -> m (v, BTree (PrimState m) k v)
 modifyWithM (Context degree) root k alter = do
   ins <- go root
   case ins of
@@ -181,7 +181,7 @@ modifyWithM (Context degree) root k alter = do
       let newRoot = BTree newRootSz newRootKeys (ContentsNodes newRootChildren)
       return (v,newRoot)
   where
-  go :: BTree s k v -> ST s (Insert s k v)
+  go :: BTree (PrimState m) k v -> m (Insert (PrimState m) k v)
   go (BTree szRef keys c) = do
     sz <- readMutVar szRef
     case c of
@@ -256,7 +256,7 @@ modifyWithM (Context degree) root k alter = do
                   leftKeys = keys
                   leftNodes = nodes
               middleKey <- readPrimArray keys middleIx
-              rightKeys :: MutablePrimArray s k <- newPrimArray (degree - 1)
+              rightKeys :: MutablePrimArray (PrimState m) k <- newPrimArray (degree - 1)
               rightNodes <- newArray degree uninitializedNode
               rightSzRef <- newMutVar 0 -- this always gets replaced
               let leftSize = middleIx
@@ -285,11 +285,11 @@ modifyWithM (Context degree) root k alter = do
 -- * marr is sorted low to high
 -- * sz is less than or equal to the true size of marr
 -- The returned value is in the inclusive range [0,sz]
-findIndexBetween :: forall s a. (Ord a, Prim a)
-  => MutablePrimArray s a -> a -> Int -> ST s Int
+findIndexBetween :: forall m a. (PrimMonad m, Ord a, Prim a)
+  => MutablePrimArray (PrimState m) a -> a -> Int -> m Int
 findIndexBetween !marr !needle !sz = go 0
   where
-  go :: Int -> ST s Int
+  go :: Int -> m Int
   go !i = if i < sz
     then do
       a <- readPrimArray marr i
@@ -304,11 +304,11 @@ findIndexBetween !marr !needle !sz = go 0
 -- The returned value is either
 -- * in the inclusive range [0,sz - 1]
 -- * the value (-1), indicating that no match was found
-findIndex :: forall s a. (Ord a, Prim a)
-  => MutablePrimArray s a -> a -> Int -> ST s (Either Int Int)
+findIndex :: forall m a. (PrimMonad m, Ord a, Prim a)
+  => MutablePrimArray (PrimState m) a -> a -> Int -> m (Either Int Int)
 findIndex !marr !needle !sz = go 0
   where
-  go :: Int -> ST s (Either Int Int)
+  go :: Int -> m (Either Int Int)
   go !i = if i < sz
     then do
       a <- readPrimArray marr i
@@ -320,11 +320,11 @@ findIndex !marr !needle !sz = go 0
 
 -- | The second value in the tuple is true when
 --   the index match was exact.
-findIndexGte :: forall s a. (Ord a, Prim a)
-  => MutablePrimArray s a -> a -> Int -> ST s (Int,Bool)
+findIndexGte :: forall m a. (PrimMonad m, Ord a, Prim a)
+  => MutablePrimArray (PrimState m) a -> a -> Int -> m (Int,Bool)
 findIndexGte !marr !needle !sz = go 0
   where
-  go :: Int -> ST s (Int,Bool)
+  go :: Int -> m (Int,Bool)
   go !i = if i < sz
     then do
       a <- readPrimArray marr i
@@ -337,12 +337,12 @@ findIndexGte !marr !needle !sz = go 0
 -- | Insert an element in the array, shifting the values right 
 --   of the index. The array size should be big enough for this
 --   shift, this is not checked.
-unsafeInsertArray ::
-     Int -- ^ Size of the original array
+unsafeInsertArray :: (PrimMonad m)
+  => Int -- ^ Size of the original array
   -> Int -- ^ Index
   -> a -- ^ Value
-  -> MutableArray s a -- ^ Array to modify
-  -> ST s ()
+  -> MutableArray (PrimState m) a -- ^ Array to modify
+  -> m ()
 unsafeInsertArray sz i x marr = do
   copyMutableArray marr (i + 1) marr i (sz - i)
   writeArray marr i x
@@ -357,25 +357,25 @@ unsafeInsertArray sz i x marr = do
 -- unsafeInsertPrimArray 5 3 'k' marr
 --
 unsafeInsertPrimArray ::
-     Prim a
+     (PrimMonad m, Prim a)
   => Int -- ^ Size of the original array
   -> Int -- ^ Index
   -> a -- ^ Value
-  -> MutablePrimArray s a -- ^ Array to modify
-  -> ST s ()
+  -> MutablePrimArray (PrimState m) a -- ^ Array to modify
+  -> m ()
 unsafeInsertPrimArray sz i x marr = do
   copyMutablePrimArray marr (i + 1) marr i (sz - i)
   writePrimArray marr i x
 
 
-showPairs :: forall s k v. (Show k, Show v, Prim k, Prim v)
+showPairs :: forall m k v. (PrimMonad m, Show k, Show v, Prim k, Prim v)
   => Int -- size
-  -> MutablePrimArray s k
-  -> MutablePrimArray s v
-  -> ST s [String]
+  -> MutablePrimArray (PrimState m) k
+  -> MutablePrimArray (PrimState m) v
+  -> m [String]
 showPairs sz keys values = go 0
   where
-  go :: Int -> ST s [String]
+  go :: Int -> m [String]
   go ix = if ix < sz
     then do
       k <- readPrimArray keys ix
@@ -386,13 +386,13 @@ showPairs sz keys values = go 0
     else return []
 
 -- | Show the internal structure of a Map, useful for debugging, not exported
-debugMap :: forall s k v. (Prim k, Prim v, Show k, Show v)
-  => Context s
-  -> BTree s k v
-  -> ST s String
+debugMap :: forall m k v. (PrimMonad m, Prim k, Prim v, Show k, Show v)
+  => Context (PrimState m)
+  -> BTree (PrimState m) k v
+  -> m String
 debugMap (Context _) (BTree rootSzRef rootKeys rootContents) = do
   rootSz <- readMutVar rootSzRef
-  let go :: Int -> Int -> MutablePrimArray s k -> Contents s k v -> ST s [(Int,String)]
+  let go :: Int -> Int -> MutablePrimArray (PrimState m) k -> Contents (PrimState m) k v -> m [(Int,String)]
       go level sz keys c = case c of
         ContentsValues values -> do
           pairStrs <- showPairs sz keys values
@@ -412,15 +412,15 @@ debugMap (Context _) (BTree rootSzRef rootKeys rootContents) = do
   allStrs <- go 0 rootSz rootKeys rootContents
   return $ unlines $ map (\(level,str) -> replicate (level * 2) ' ' ++ str) ((0,"root size: " ++ show rootSz) : allStrs)
 
-pairForM :: forall s a b c. Prim a
+pairForM :: forall m a b c. (PrimMonad m, Prim a)
   => Int 
-  -> MutablePrimArray s a 
-  -> MutableArray s c
-  -> (a -> c -> ST s b)
-  -> ST s [b]
+  -> MutablePrimArray (PrimState m) a 
+  -> MutableArray (PrimState m) c
+  -> (a -> c -> m b)
+  -> m [b]
 pairForM sz marr1 marr2 f = go 0
   where
-  go :: Int -> ST s [b]
+  go :: Int -> m [b]
   go ix = if ix < sz
     then do
       a <- readPrimArray marr1 ix

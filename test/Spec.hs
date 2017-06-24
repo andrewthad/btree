@@ -3,6 +3,9 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE PartialTypeSignatures #-}
+{-# LANGUAGE LambdaCase #-}
+
+{-# OPTIONS_GHC -Wno-partial-type-signatures #-}
 
 import Test.Tasty
 import Test.Tasty.SmallCheck as SC
@@ -16,10 +19,13 @@ import Debug.Trace
 import Control.Monad.Trans.Except
 import Control.Monad.Trans.Class
 import Data.Word
+import Data.Int
+import Data.Proxy
 import Data.Primitive.Types
 import Data.Foldable
 import Data.Primitive.Compact (withToken,getSizeOfCompact)
 import System.IO.Unsafe
+import Data.Hashable
 
 import qualified Data.List as L
 import qualified Data.List.NonEmpty as NE
@@ -70,6 +76,8 @@ scProps :: TestTree
 scProps = testGroup "smallcheck"
   [ testGroup "standard heap" (smallcheckTests ordering) 
   , testGroup "compact heap" (smallcheckTests orderingCompact)
+  , testPropDepth 7 "standard heap lookup"
+      (over (series :: Series IO [Positive Int]) (lookupAfterInsert 3))
   ]
 
 unitTests :: TestTree
@@ -111,12 +119,34 @@ unitTests = testGroup "Unit tests"
       actual <- return (runST (B.fromList (B.Context (BTL.Context 4)) xs' >>= B.toAscList))
       actual @?= S.toAscList (S.fromList xs')
   , testCase "compact b-tree can be created" $ withToken $ \token -> do
-      _ <- BTC.new (BTC.Context 5 token) :: IO (BTC.BTree RealWorld Word Word _)
+      ctx <- BTC.newContext 5 token
+      _ <- BTC.new ctx :: IO (BTC.BTree RealWorld Word Word _)
       return ()
   ]
 
 testPropDepth :: Testable IO a => Int -> String -> a -> TestTree
 testPropDepth n name = localOption (SmallCheckDepth n) . testProperty name
+
+lookupAfterInsert :: (Show n, Ord n, Prim n)
+  => Int -- ^ degree of b-tree
+  -> [Positive n] -- ^ values to insert
+  -> Either Reason Reason
+lookupAfterInsert degree xs' =
+  let xs = map getPositive xs'
+      expected = map (\x -> (x,x)) $ S.toAscList $ S.fromList xs
+   in fmap (const "good") $ runST $ do
+        m <- B.new (B.Context (BTL.Context degree))
+        forM_ xs $ \x -> do
+          B.insert m x x
+        foldlM (\e x -> case e of
+            Right () -> do
+              B.lookup m x >>= \case
+                Nothing -> return $ Left ("could not find " ++ show x ++ " after inserting it")
+                Just y -> return $ if x == y
+                  then Right ()
+                  else Left ("looked up " ++ show x ++ " but found wrong value " ++ show y)
+            Left err -> return (Left err)
+          ) (Right ()) xs
 
 ordering :: (Show n, Ord n, Prim n)
   => Int -- ^ degree of b-tree
@@ -143,7 +173,7 @@ orderingCompact degree xs' =
   let xs = map getPositive xs'
       expected = map (\x -> (x,x)) $ S.toAscList $ S.fromList xs
       (actual,layout) = runST $ withToken $ \c -> do
-        let ctx = BTC.Context degree c
+        ctx <- BTC.newContext degree c
         m0 <- BTC.new ctx
         m1 <- foldlM (\ !m !x -> BTC.insert ctx m x x) m0 xs
         (,) <$> BTC.toAscList ctx m1 <*> BTC.debugMap ctx m1
@@ -179,13 +209,15 @@ singletonSeriesA = (fmap.fmap) Positive (scanSeries (\n -> [n + 26399]) 0)
 singletonSeriesB :: Series m [Positive Word8]
 singletonSeriesB = (fmap.fmap) Positive (scanSeries (\n -> [n + 73]) 0)
 
-sizeAfterInserts :: Int -> Int -> IO Word 
-sizeAfterInserts total degree = withToken $ \c -> do
-  let ctx = BTC.Context degree c
+sizeAfterInserts :: forall n. (Num n, Prim n, Ord n, Hashable n) => Proxy n -> n -> Int -> IO Word 
+sizeAfterInserts _ total degree = withToken $ \c -> do
+  ctx <- BTC.newContext degree c
   m0 <- BTC.new ctx
   let go !ix !m = if ix < total
         then do
-          m' <- BTC.insert ctx m (ix :: Int) ix
+          let x = hashWithSalt 45237 (ix :: n)
+              y = fromIntegral x :: n
+          m' <- BTC.insert ctx m y y
           go (ix + 1) m'
         else return ()
   go 0 m0
@@ -193,7 +225,7 @@ sizeAfterInserts total degree = withToken $ \c -> do
 
 sizeAfterRepeatedInserts :: Int -> IO Word 
 sizeAfterRepeatedInserts total = withToken $ \c -> do
-  let ctx = BTC.Context 8 c
+  ctx <- BTC.newContext 8 c
   m0 <- BTC.new ctx
   let go !ix !m = if ix < total
         then do
@@ -206,12 +238,15 @@ sizeAfterRepeatedInserts total = withToken $ \c -> do
 
 basicBenchmarks :: IO ()
 basicBenchmarks = do
-  let degrees = [8,16,64,128,230]
-      sizes = [1000,10000,100000]
+  let degrees = [50,105]
+      sizes = [10000,15000,30000]
       pairs = (,) <$> degrees <*> sizes
   forM_ pairs $ \(degree,size) -> do
-    sz <- sizeAfterInserts size degree
-    putStrLn ("Bytes of " ++ show size ++ " distinct inserts into b-tree of degree " ++ show degree ++ ": " ++ show sz)
+    sz <- sizeAfterInserts (Proxy :: Proxy Int64) (fromIntegral size) degree
+    putStrLn ("Bytes of " ++ show size ++ " distinct inserts (Int64) into b-tree of degree " ++ show degree ++ ": " ++ show sz)
+  forM_ pairs $ \(degree,size) -> do
+    sz <- sizeAfterInserts (Proxy :: Proxy Int32) (fromIntegral size) degree
+    putStrLn ("Bytes of " ++ show size ++ " distinct inserts (Int32) into b-tree of degree " ++ show degree ++ ": " ++ show sz)
   putStrLn "Repeated Inserts"
   forM_ sizes $ \size -> do
     sz <- sizeAfterRepeatedInserts size
