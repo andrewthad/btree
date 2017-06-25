@@ -37,8 +37,23 @@ import qualified Data.Primitive.PrimArray as P
 
 main :: IO ()
 main = do
-  basicBenchmarks
-  defaultMain tests
+  putStrLn "Starting test suite"
+  withToken $ \c -> do
+    ctx <- BTC.newContext 3 c
+    b0 <- BTC.new ctx
+    b1 <- BTC.insert ctx b0 (1 :: Int) (1 :: Int)
+    b2 <- BTC.insert ctx b1 (2 :: Int) (2 :: Int)
+    b3 <- BTC.insert ctx b2 (3 :: Int) (3 :: Int)
+    -- b4 <- BTC.insert ctx b3 (4 :: Int) (4 :: Int)
+    -- b5 <- BTC.insert ctx b4 (5 :: Int) (5 :: Int)
+    -- b6 <- BTC.insert ctx b5 (6 :: Int) (6 :: Int)
+    -- b7 <- BTC.insert ctx b6 (7 :: Int) (7 :: Int)
+    print =<< BTC.lookup b3 3
+    -- print =<< BTC.toAscList ctx b2
+    return ()
+  -- defaultMain tests
+  -- basicBenchmarks
+  putStrLn "Finished test suite"
 
 tests :: TestTree
 tests = testGroup "Tests" [unitTests,properties]
@@ -78,6 +93,12 @@ scProps = testGroup "smallcheck"
   , testGroup "compact heap" (smallcheckTests orderingCompact)
   , testPropDepth 7 "standard heap lookup"
       (over (series :: Series IO [Positive Int]) (lookupAfterInsert 3))
+  , testPropDepth 500 "standard heap bigger lookup"
+      (over singletonSeriesA (lookupAfterInsert 3))
+  , testPropDepth 7 "compact heap lookup"
+      (over (series :: Series IO [Positive Int]) (lookupAfterInsertCompact 3))
+  , testPropDepth 500 "compact heap bigger lookup"
+      (over singletonSeriesA (lookupAfterInsertCompact 10))
   ]
 
 unitTests :: TestTree
@@ -138,7 +159,7 @@ lookupAfterInsert degree xs' =
         m <- B.new (B.Context (BTL.Context degree))
         forM_ xs $ \x -> do
           B.insert m x x
-        foldlM (\e x -> case e of
+        r1 <- foldlM (\e x -> case e of
             Right () -> do
               B.lookup m x >>= \case
                 Nothing -> return $ Left ("could not find " ++ show x ++ " after inserting it")
@@ -147,6 +168,40 @@ lookupAfterInsert degree xs' =
                   else Left ("looked up " ++ show x ++ " but found wrong value " ++ show y)
             Left err -> return (Left err)
           ) (Right ()) xs
+        r2 <- runExceptT $ forM_ xs $ \x -> lift (B.lookup m x) >>= \case
+          Nothing -> ExceptT $ return $ Left ("could not find " ++ show x ++ " after inserting it")
+          Just y -> ExceptT $ return $ if x == y
+            then Right ()
+            else Left ("looked up " ++ show x ++ " but found wrong value " ++ show y)
+        return (r1 >> r2)
+
+lookupAfterInsertCompact :: (Show n, Ord n, Prim n)
+  => Int -- ^ degree of b-tree
+  -> [Positive n] -- ^ values to insert
+  -> Either Reason Reason
+lookupAfterInsertCompact degree xs' =
+  let xs = map getPositive xs'
+      expected = map (\x -> (x,x)) $ S.toAscList $ S.fromList xs
+   in fmap (const "good") $ runST $ withToken $ \c -> do
+        ctx <- BTC.newContext degree c
+        m0 <- BTC.new ctx
+        m1 <- foldlM (\ !m !x -> BTC.insert ctx m x x) m0 xs
+        r1 <- foldlM (\e x -> case e of
+            Right () -> do
+              BTC.lookup m1 x >>= \case
+                Nothing -> return $ Left ("could not find " ++ show x ++ " after inserting it")
+                Just y -> return $ if x == y
+                  then Right ()
+                  else Left ("looked up " ++ show x ++ " but found wrong value " ++ show y)
+            Left err -> return (Left err)
+          ) (Right ()) xs
+        r2 <- runExceptT $ forM_ xs $ \x -> lift (BTC.lookup m1 x) >>= \case
+          Nothing -> ExceptT $ return $ Left ("could not find " ++ show x ++ " after inserting it")
+          Just y -> ExceptT $ return $ if x == y
+            then Right ()
+            else Left ("looked up " ++ show x ++ " but found wrong value " ++ show y)
+        return (r1 >> r2)
+
 
 ordering :: (Show n, Ord n, Prim n)
   => Int -- ^ degree of b-tree

@@ -1,3 +1,4 @@
+{-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE BangPatterns #-}
@@ -5,8 +6,10 @@
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE UnboxedSums #-}
 {-# LANGUAGE MagicHash #-}
+{-# LANGUAGE DataKinds #-}
 
 {-# OPTIONS_GHC -O2 -Wall -Werror -fno-warn-unused-imports #-}
+
 
 module BTree.Compact
   ( BTree
@@ -29,10 +32,15 @@ import Data.Word
 import Control.Monad.ST
 import Control.Monad.Primitive
 import GHC.Prim
+import Data.Bits (unsafeShiftR)
 
 import Data.Primitive.PrimRef
 import Data.Primitive.PrimArray
 import Data.Primitive.MutVar
+import GHC.Ptr (Ptr(..))
+import Numeric (showHex)
+
+import qualified Data.List as L
 
 data Context s c = Context
   { _contextDegree :: {-# UNPACK #-} !Int
@@ -45,7 +53,63 @@ data Context s c = Context
   --   --   but the array inside it must live in the compact region.
   }
 
-data Sizing s c = Sizing
+data BTree s k v (c :: Heap)
+  = BTree
+    {-# UNPACK #-} !(Sizing s c) -- block and index for current size
+    {-# UNPACK #-} !(MutablePrimArray s k)
+    {-# UNPACK #-} !(FlattenedContents s k v c)
+
+-- In defining this instance, we make the assumption that an
+-- Addr and an Int have the same size.
+instance Contractible (BTree s k v) where
+  unsafeSizeOfContractedElement _ =
+    machineWordsInBTree * (sizeOf (undefined :: Int))
+  unsafeWriteContractedArray (ContractedMutableArray marr) ix (BTree (Sizing szIx (MutablePrimArray szBlock)) (MutablePrimArray keys) (FlattenedContents toggle (MutablePrimArray values) (ContractedMutableArray (MutableByteArray nodes)))) = do
+    let machIx = ix * machineWordsInBTree
+    writeByteArray marr (machIx + 4) szIx
+    writeByteArray marr (machIx + 0) (unsafeUnliftedToAddr szBlock)
+    writeByteArray marr (machIx + 1) (unsafeUnliftedToAddr keys)
+    writeByteArray marr (machIx + 5) toggle
+    writeByteArray marr (machIx + 2) (unsafeUnliftedToAddr values)
+    writeByteArray marr (machIx + 3) (unsafeUnliftedToAddr nodes)
+  unsafeReadContractedArray (ContractedMutableArray marr) ix = do
+    let !machIx = ix * machineWordsInBTree
+    !a <- readByteArray marr (machIx + 4)
+    !b <- readByteArray marr (machIx + 0)
+    !c <- readByteArray marr (machIx + 1)
+    !d <- readByteArray marr (machIx + 5)
+    !e <- readByteArray marr (machIx + 2)
+    !f <- readByteArray marr (machIx + 3)
+    let !res = BTree
+          (Sizing a (MutablePrimArray (unsafeUnliftedFromAddr b)))
+          (MutablePrimArray (unsafeUnliftedFromAddr c))
+          (FlattenedContents
+            d
+            (MutablePrimArray (unsafeUnliftedFromAddr e))
+            (ContractedMutableArray (MutableByteArray (unsafeUnliftedFromAddr f)))
+          )
+    -- _ <- error ("just read: " ++ show a)
+    return res
+
+_showBTreeArrayHex :: (PrimMonad m)
+  => ContractedMutableArray (PrimState m) (BTree (PrimState m) k v) c
+  -> Int
+  -> m String
+_showBTreeArrayHex (ContractedMutableArray marr) ix = do
+  let machIx = ix * machineWordsInBTree
+  a <- readByteArray marr (machIx + 0)
+  b <- readByteArray marr (machIx + 1)
+  c <- readByteArray marr (machIx + 2)
+  d <- readByteArray marr (machIx + 3)
+  e <- readByteArray marr (machIx + 4)
+  f <- readByteArray marr (machIx + 5)
+  let _ = [a,b,c,d,e,f] :: [Ptr Word8]
+  return $ L.intercalate " " [show a,show b,show c,show d,show e,show f]
+
+machineWordsInBTree :: Int
+machineWordsInBTree = 6
+
+data Sizing s (c :: Heap) = Sizing
   {-# UNPACK #-} !Int
   -- The array index does not live in the compact region
   {-# UNPACK #-} !(MutablePrimArray s Word16)
@@ -57,26 +121,51 @@ packedSizesCount = 2040
 
 newContext :: (PrimMonad m) => Int -> Token c -> m (Context (PrimState m) c)
 newContext deg token = do
-  -- newCompactArray' <- newCompactArrayCopier token deg
-  -- newKeyArray <- newCompactPrimArrayCopier token (deg - 1)
-  -- newValueArray <- newCompactPrimArrayCopier token (deg - 1)
   !sizes0 <- compactAddGeneral token =<< newPrimArray packedSizesCount
   let !sizing0 = Sizing 0 sizes0
   ref <- newMutVar sizing0
   return (Context deg token ref) -- newCompactArray' newKeyArray newValueArray)
 
--- Using this data constructor to construct is unsafe. For that
+
 -- purpose, use mkBTree instead. Using this for pattern matching is ok. 
-data BTree s k v c
-  = BTree
-    {-# UNPACK #-} !(Sizing s c) -- block and index for current size
-    {-# UNPACK #-} !(MutablePrimArray s k)
-    !(Contents s k v c)
-  -- | BTreeUnused -- this is to prevent unpacking into functions
+
+-- We manually flatten this sum type so that it can be unpacked
+-- into BTree.
+data FlattenedContents s k v c = FlattenedContents
+  {-# UNPACK #-} !Int
+  {-# UNPACK #-} !(MutablePrimArray s v)
+  {-# UNPACK #-} !(ContractedMutableArray s (BTree s k v) c)
 
 data Contents s k v c
   = ContentsValues {-# UNPACK #-} !(MutablePrimArray s v)
-  | ContentsNodes {-# UNPACK #-} !(CompactMutableArray s (BTree s k v) c)
+  | ContentsNodes {-# UNPACK #-} !(ContractedMutableArray s (BTree s k v) c)
+
+{-# INLINE flattenContentsToContents #-}
+flattenContentsToContents :: 
+     FlattenedContents s k v c
+  -> Contents s k v c
+flattenContentsToContents (FlattenedContents i values nodes) =
+  if i == 0
+    then ContentsValues values
+    else ContentsNodes nodes
+
+-- | This one is a little trickier. We have to provide garbage
+--   to fill in the unused slot.
+{-# INLINE contentsToFlattenContents #-}
+contentsToFlattenContents :: 
+     MutablePrimArray s v -- ^ garbage value
+  -> ContractedMutableArray s (BTree s k v) c -- ^ garbage value
+  -> Contents s k v c
+  -> FlattenedContents s k v c
+contentsToFlattenContents !garbageValues !garbageNodes !c = case c of
+  ContentsValues values -> FlattenedContents 0 values garbageNodes
+  ContentsNodes nodes -> FlattenedContents 1 garbageValues nodes 
+
+-- | Get the nodes out, even if they are garbage. This is used
+--   to get a garbage value when needed.
+{-# INLINE demandFlattenedContentsNodes #-}
+demandFlattenedContentsNodes :: FlattenedContents s k v c -> ContractedMutableArray s (BTree s k v) c
+demandFlattenedContentsNodes (FlattenedContents _ _ nodes) = nodes
 
 data Insert s k v c
   = Ok !v
@@ -89,15 +178,21 @@ data Insert s k v c
       --   the key propagated to the parent,
       --   the inserted value, updated sizing info.
 
+{-# INLINE mkBTree #-}
 mkBTree :: PrimMonad m
   => Token c
+  -> ContractedMutableArray (PrimState m) (BTree (PrimState m) k v) c -- ^ garbage value
   -> Sizing (PrimState m) c
-  -> MutablePrimArray (PrimState m) k
+  -> MutablePrimArray (PrimState m) k -- ^ keys
   -> Contents (PrimState m) k v c
   -> m (BTree (PrimState m) k v c)
-mkBTree token a b c = do
-  let !bt = BTree a b c
+mkBTree token garbage a b c = do
+  let !garbageValues = coercePrimArray b
+      !bt = BTree a b (contentsToFlattenContents garbageValues garbage c)
   compactAddGeneral token bt
+
+coercePrimArray :: MutablePrimArray s a -> MutablePrimArray s b
+coercePrimArray (MutablePrimArray a) = MutablePrimArray a
 
 new :: (PrimMonad m, Prim k, Prim v)
   => Context (PrimState m) c
@@ -111,26 +206,51 @@ new (Context !degree !token !szRef) = do
   writeMutVar szRef =<< nextSizing token sizing0
   !keys <- newPrimArray (degree - 1)
   !values <- newPrimArray (degree - 1)
-  mkBTree token sizing0 keys (ContentsValues values)
+  -- it kind of pains me that this is needed, but since
+  -- we only do it once when calling @new@, it should
+  -- not hurt performance at all.
+  !garbageNodes <- newContractedArray token 0
+  mkBTree token garbageNodes sizing0 keys (ContentsValues values)
 
+-- {-# SPECIALIZE lookup :: BTree RealWorld Int Int c -> Int -> IO (Maybe Int) #-}
+{-# INLINABLE lookup #-}
 lookup :: forall m k v c. (PrimMonad m, Ord k, Prim k, Prim v)
   => BTree (PrimState m) k v c -> k -> m (Maybe v)
-lookup theNode k = go theNode
+lookup theNode k = go 0 theNode
   where
-  go :: BTree (PrimState m) k v c -> m (Maybe v)
-  go (BTree sizing keys c) = do
+  go :: Int -> BTree (PrimState m) k v c -> m (Maybe v)
+  go !n (BTree sizing@(Sizing _szIx _) keys c@(FlattenedContents _tog _ _)) = do
     sz <- readNodeSize sizing
-    case c of
+    -- if n == 0
+    --   then error =<< showBTreeArrayHex -- ("size ix of leaf: " ++ show szIx ++ " and flattened toggle " ++ show tog)
+    --   else return ()
+    case flattenContentsToContents c of
       ContentsValues values -> do
-        e <- findIndex keys k sz
-        case e of
-          Left _ -> return Nothing
-          Right ix -> do
+        ix <- findIndex keys k sz
+        if ix < 0
+          then return Nothing
+          else do
             v <- readPrimArray values ix
             return (Just v)
       ContentsNodes nodes -> do
-        ix <- findIndexBetween keys k sz
-        go =<< readCompactArray nodes ix
+        cl <- _showBTreeArrayHex nodes 0 -- ("size ix of leaf: " ++ show szIx ++ " and flattened toggle " ++ show tog)
+        cr <- _showBTreeArrayHex nodes 1 -- ("size ix of leaf: " ++ show szIx ++ " and flattened toggle " ++ show tog)
+        -- cx <- _showBTreeArrayHex nodes 2 -- ("size ix of leaf: " ++ show szIx ++ " and flattened toggle " ++ show tog)
+        -- _ <- error (cl ++ "\n" ++ cr)
+        ix <- findIndexOfGtElem keys k sz
+        -- _ <- error ("index of gt elem: " ++ show ix)
+        !node <- readContractedArray nodes ix
+        _ <- case node of 
+          BTree (Sizing szIx (MutablePrimArray arr)) _ (FlattenedContents togBit _ _) -> error
+            ("found size ix: " ++ showHex szIx "" ++ " and sz ptr: " 
+            ++ show (_addrToPtr (unsafeUnliftedToAddr arr))
+            ++ " and toggle bit: " ++ showHex togBit ""
+            ++ "\n" ++ cl ++ "\n" ++ cr)
+        go (n + 1) node
+
+_addrToPtr :: Addr -> Ptr Word8
+_addrToPtr (Addr a) = Ptr a
+
 
 {-# INLINE insert #-}
 insert :: (Ord k, Prim k, Prim v, PrimMonad m)
@@ -148,7 +268,7 @@ insert !ctx !m !k !v = do
 --
 -- When we turn on this specialize pragma, it gets way faster
 -- for the particular case.
--- {-# SPECIALIZE modifyWithM :: Context RealWorld c -> BTree RealWorld Int Int c -> Int -> (Maybe Int -> IO Int) -> IO (Int, BTree RealWorld Int Int c) #-}
+{-# SPECIALIZE modifyWithM :: Context RealWorld c -> BTree RealWorld Int Int c -> Int -> (Maybe Int -> IO Int) -> IO (Int, BTree RealWorld Int Int c) #-}
 {-# INLINABLE modifyWithM #-}
 modifyWithM :: forall m k v c. (Ord k, Prim k, Prim v, PrimMonad m)
   => Context (PrimState m) c
@@ -165,26 +285,31 @@ modifyWithM (Context !degree !token !sizingRef) !root !k alter = do
       writeNodeSize sizing 1
       newRootKeys <- newPrimArray (degree - 1)
       writePrimArray newRootKeys 0 newRootKey
-      !newRootChildren <- newCompactArray token degree
+      !newRootChildren <- newContractedArray token degree
       !leftNode <- compactAddGeneral token root
-      writeCompactArray newRootChildren 0 leftNode
+      writeContractedArray newRootChildren 0 leftNode
       !rightNode' <- compactAddGeneral token rightNode
-      writeCompactArray newRootChildren 1 rightNode'
-      -- let !newRoot = (BTree newRootSz newRootKeys (ContentsNodes newRootChildren))
-      !newRoot <- mkBTree token sizing newRootKeys (ContentsNodes newRootChildren)
+      writeContractedArray newRootChildren 1 rightNode'
+      -- let !newRoot = (BTree sizing newRootKeys (contentsToFlattenContents (coercePrimArray newRootKeys) newRootChildren (ContentsNodes newRootChildren)))
+      !newRoot <- mkBTree token newRootChildren sizing newRootKeys (ContentsNodes newRootChildren)
       !newSizing <- nextSizing token sizing
       writeMutVar sizingRef newSizing
+      -- _ <- case leftNode of
+      --   BTree (Sizing leftSzIx _) _ _ -> error ("size ix of left leaf: " ++ show leftSzIx)
+      -- _ <- case rightNode of
+      --   BTree (Sizing rightSzIx _) _ _ -> error ("size ix of right leaf: " ++ show rightSzIx)
       return (v,newRoot)
   where
   go :: BTree (PrimState m) k v c -> m (Insert (PrimState m) k v c)
   -- go BTreeUnused = error "encountered BTreeUnused" -- should not happen
   go (BTree !szRef !keys !c) = do
     !sz <- readNodeSize szRef
-    case c of
+    case flattenContentsToContents c of
       ContentsValues !values -> do
-        !e <- findIndex keys k sz
-        case e of
-          Left !gtIx -> do
+        !ix <- findIndex keys k sz
+        if ix < 0
+          then do
+            let !gtIx = decodeGtIndex ix
             !v <- alter Nothing
             if sz < degree - 1
               then do
@@ -224,9 +349,9 @@ modifyWithM (Context !degree !token !sizingRef) !root !k alter = do
                     writeNodeSize szRef leftSize
                 !propagated <- readPrimArray rightKeys 0
                 !newSizing <- nextSizing token rightSzRef
-                !newTree <- mkBTree token rightSzRef rightKeys (ContentsValues rightValues)
+                !newTree <- mkBTree token (demandFlattenedContentsNodes c) rightSzRef rightKeys (ContentsValues rightValues)
                 return (Split newTree propagated v newSizing)
-          Right ix -> do
+          else do
             !v <- readPrimArray values ix
             !v' <- alter (Just v)
             writePrimArray values ix v'
@@ -236,14 +361,14 @@ modifyWithM (Context !degree !token !sizingRef) !root !k alter = do
         -- case e of
         --   Right _ -> error "write Right case"
         --   Left gtIx -> do
-        !node <- readCompactArray nodes (if isEq then gtIx + 1 else gtIx)
+        !node <- readContractedArray nodes (if isEq then gtIx + 1 else gtIx)
         !ins <- go node
         case ins of
           Ok !v -> return (Ok v)
           Split !rightNode !propagated !v !sizing -> if sz < degree - 1
             then do
               unsafeInsertPrimArray sz gtIx propagated keys
-              unsafeInsertCompactArray (sz + 1) (gtIx + 1) rightNode nodes
+              unsafeInsertContractedArray (sz + 1) (gtIx + 1) rightNode nodes
               writeNodeSize szRef (sz + 1)
               writeMutVar sizingRef sizing
               return (Ok v)
@@ -254,15 +379,15 @@ modifyWithM (Context !degree !token !sizingRef) !root !k alter = do
                   !rightSzRef = sizing
               !middleKey <- readPrimArray keys middleIx
               !rightKeys <- newPrimArray (degree - 1)
-              !rightNodes <- newCompactArray token degree -- uninitializedNode
+              !rightNodes <- newContractedArray token degree -- uninitializedNode
               let !leftSize = middleIx
                   !rightSize = sz - leftSize
               if middleIx >= gtIx
                 then do
                   copyMutablePrimArray rightKeys 0 leftKeys (leftSize + 1) (rightSize - 1)
-                  copyCompactMutableArray rightNodes 0 leftNodes (leftSize + 1) rightSize
+                  copyContractedMutableArray rightNodes 0 leftNodes (leftSize + 1) rightSize
                   unsafeInsertPrimArray leftSize gtIx propagated leftKeys
-                  unsafeInsertCompactArray (leftSize + 1) (gtIx + 1) rightNode leftNodes
+                  unsafeInsertContractedArray (leftSize + 1) (gtIx + 1) rightNode leftNodes
                   writeNodeSize szRef (leftSize + 1)
                   writeNodeSize rightSzRef (rightSize - 1)
                 else do
@@ -270,34 +395,46 @@ modifyWithM (Context !degree !token !sizingRef) !root !k alter = do
                   -- then doing another copy from right to right. We can do better.
                   -- There is a similar note further up.
                   copyMutablePrimArray rightKeys 0 leftKeys (leftSize + 1) (rightSize - 1)
-                  copyCompactMutableArray rightNodes 0 leftNodes (leftSize + 1) rightSize
+                  copyContractedMutableArray rightNodes 0 leftNodes (leftSize + 1) rightSize
                   unsafeInsertPrimArray (rightSize - 1) (gtIx - leftSize - 1) propagated rightKeys
-                  unsafeInsertCompactArray rightSize (gtIx - leftSize) rightNode rightNodes
+                  unsafeInsertContractedArray rightSize (gtIx - leftSize) rightNode rightNodes
                   writeNodeSize szRef leftSize
                   writeNodeSize rightSzRef rightSize
               !newSizing <- nextSizing token rightSzRef
-              !x <- mkBTree token rightSzRef rightKeys (ContentsNodes rightNodes)
+              !x <- mkBTree token rightNodes rightSzRef rightKeys (ContentsNodes rightNodes)
               return (Split x middleKey v newSizing)
 
 -- Preconditions:
 -- * marr is sorted low to high
 -- * sz is less than or equal to the true size of marr
 -- The returned value is either
--- * in the inclusive range [0,sz - 1]
--- * the value (-1), indicating that no match was found
+-- * in the inclusive range [0,sz - 1], indicates a match
+-- * a negative number x, indicates that the first greater
+--   element is found at index ((negate x) - 1)
 findIndex :: forall m a. (PrimMonad m, Ord a, Prim a)
-  => MutablePrimArray (PrimState m) a -> a -> Int -> m (Either Int Int) -- (# Int# | Int# #)
+  => MutablePrimArray (PrimState m) a
+  -> a
+  -> Int
+  -> m Int -- (Either Int Int)
 findIndex !marr !needle !sz = go 0
   where
-  go :: Int -> m (Either Int Int)
+  go :: Int -> m Int
   go !i = if i < sz
     then do
       !a <- readPrimArray marr i
       case compare a needle of
         LT -> go (i + 1)
-        EQ -> return (Right i)
-        GT -> return (Left i)
-    else return (Left i)
+        EQ -> return i
+        GT -> return (encodeGtIndex i)
+    else return (encodeGtIndex i)
+
+{-# INLINE encodeGtIndex #-}
+encodeGtIndex :: Int -> Int
+encodeGtIndex i = negate i - 1
+
+{-# INLINE decodeGtIndex #-}
+decodeGtIndex :: Int -> Int
+decodeGtIndex x = negate x - 1
 
 -- | The second value in the tuple is true when
 --   the index match was exact.
@@ -315,18 +452,18 @@ findIndexGte !marr !needle !sz = go 0
         GT -> return (i,False)
     else return (i,False)
 
-findIndexBetween :: forall m a. (PrimMonad m, Ord a, Prim a)
-  => MutablePrimArray (PrimState m) a -> a -> Int -> m Int
-findIndexBetween !marr !needle !sz = go 0
-  where
-  go :: Int -> m Int
-  go !i = if i < sz
-    then do
-      a <- readPrimArray marr i
-      if a > needle
-        then return i
-        else go (i + 1)
-    else return i -- i should be equal to sz
+-- findIndexBetween :: forall m a. (PrimMonad m, Ord a, Prim a)
+--   => MutablePrimArray (PrimState m) a -> a -> Int -> m Int
+-- findIndexBetween !marr !needle !sz = go 0
+--   where
+--   go :: Int -> m Int
+--   go !i = if i < sz
+--     then do
+--       a <- readPrimArray marr i
+--       if a > needle
+--         then return i
+--         else go (i + 1)
+--     else return i -- i should be equal to sz
 
 -- Inserts a value at the designated index,
 -- shifting everything after it to the right.
@@ -355,8 +492,8 @@ debugMap :: forall m k v c. (Prim k, Prim v, Show k, Show v, PrimMonad m)
 -- debugMap (Context _ _ _ _ _) BTreeUnused = return "BTreeUnused, should not happen"
 debugMap (Context _ _ _) (BTree !rootSizing !rootKeys !rootContents) = do
   !rootSz <- readNodeSize rootSizing
-  let go :: Int -> Int -> MutablePrimArray (PrimState m) k -> Contents (PrimState m) k v c -> m [(Int,String)]
-      go level sz keys c = case c of
+  let go :: Int -> Int -> MutablePrimArray (PrimState m) k -> FlattenedContents (PrimState m) k v c -> m [(Int,String)]
+      go level sz keys c = case flattenContentsToContents c of
         ContentsValues values -> do
           pairStrs <- showPairs sz keys values
           return (map (\s -> (level,s)) pairStrs)
@@ -367,7 +504,7 @@ debugMap (Context _ _ _) (BTree !rootSizing !rootKeys !rootContents) = do
               nextStrs <- go (level + 1) nextSz nextKeys nextContents
               return (nextStrs ++ [(level,show k)]) -- ++ " (Size: " ++ show nextSz ++ ")")])
           -- I think this should always end up being in bounds
-          BTree lastSizing lastKeys lastContents <- readCompactArray nodes sz
+          BTree lastSizing lastKeys lastContents <- readContractedArray nodes sz
           lastSz <- readNodeSize lastSizing
           lastStrs <- go (level + 1) lastSz lastKeys lastContents
           -- return (nextStrs ++ [(level,show k)])
@@ -375,10 +512,10 @@ debugMap (Context _ _ _) (BTree !rootSizing !rootKeys !rootContents) = do
   allStrs <- go 0 rootSz rootKeys rootContents
   return $ unlines $ map (\(level,str) -> replicate (level * 2) ' ' ++ str) ((0,"root size: " ++ show rootSz) : allStrs)
 
-pairForM :: forall m a b c d. (Prim a, PrimMonad m)
+pairForM :: forall m a b c d. (Prim a, PrimMonad m, Contractible d)
   => Int 
   -> MutablePrimArray (PrimState m) a 
-  -> CompactMutableArray (PrimState m) d c
+  -> ContractedMutableArray (PrimState m) d c
   -> (a -> d c -> m b)
   -> m [b]
 pairForM sz marr1 marr2 f = go 0
@@ -387,7 +524,7 @@ pairForM sz marr1 marr2 f = go 0
   go ix = if ix < sz
     then do
       a <- readPrimArray marr1 ix
-      c <- readCompactArray marr2 ix
+      c <- readContractedArray marr2 ix
       b <- f a c
       bs <- go (ix + 1)
       return (b : bs)
@@ -449,7 +586,7 @@ foldrWithKey f b0 (Context _ _ _) root = flip go b0 root
   -- go BTreeUnused !b = return b -- should not happen
   go (BTree sizing keys c) !b = do
     sz <- readNodeSize sizing
-    case c of
+    case flattenContentsToContents c of
       ContentsValues values -> foldrPrimArrayPairs sz f b keys values
       ContentsNodes nodes -> foldrArray (sz + 1) go b nodes
 
@@ -471,19 +608,58 @@ foldrPrimArrayPairs len f b0 ks vs = go (len - 1) b0
       go (ix - 1) b2
     else return b1
 
-foldrArray :: forall m a b c. (PrimMonad m)
+foldrArray :: forall m a b c. (PrimMonad m, Contractible a)
   => Int -- ^ length of array
   -> (a c -> b -> m b)
   -> b
-  -> CompactMutableArray (PrimState m) a c
+  -> ContractedMutableArray (PrimState m) a c
   -> m b
 foldrArray len f b0 arr = go (len - 1) b0
   where
   go :: Int -> b -> m b
   go !ix !b1 = if ix >= 0
     then do
-      a <- readCompactArray arr ix
+      a <- readContractedArray arr ix
       b2 <- f a b1
       go (ix - 1) b2
     else return b1
 
+-- | This lookup is O(log n). It provides the index of the
+--   first element greater than the argument.
+--   Precondition, the array provided is sorted low to high.
+{-# INLINABLE findIndexOfGtElem #-}
+findIndexOfGtElem :: forall m a. (Ord a, Prim a, PrimMonad m) => MutablePrimArray (PrimState m) a -> a -> Int -> m Int
+findIndexOfGtElem v needle sz = go 0 (sz - 1)
+  where
+  go :: Int -> Int -> m Int
+  go !lo !hi = if lo <= hi
+    then do
+      let !mid = lo + half (hi - lo)
+      !val <- readPrimArray v mid
+      if | val == needle -> return (mid + 1)
+         | val < needle -> go (mid + 1) hi
+         | otherwise -> go lo (mid - 1)
+    else return lo
+
+-- -- | This lookup is O(log n). It provides the index of the
+-- --   match, or it returns (-1) to indicate that there was
+-- --   no match.
+-- {-# INLINABLE lookupSorted #-}
+-- lookupSorted :: forall m a. (Ord a, Prim a, PrimMonad m) => MutablePrimArray (PrimState m) a -> a -> m Int
+-- lookupSorted v needle = do
+--   sz <- getSizeofMutablePrimArray v
+--   go (-1) 0 (sz - 1)
+--   where
+--   go :: Int -> Int -> Int -> m Int
+--   go !result !lo !hi = if lo <= hi
+--     then do
+--       let !mid = lo + half (hi - lo)
+--       !val <- readPrimArray v mid
+--       if | val == needle -> go mid lo (mid - 1)
+--          | val < needle -> go result (mid + 1) hi
+--          | otherwise -> go result lo (mid - 1)
+--     else return result
+
+{-# INLINE half #-}
+half :: Int -> Int
+half x = unsafeShiftR x 1

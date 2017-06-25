@@ -26,9 +26,10 @@ import System.Clock
 main :: IO ()
 main = do
   putStrLn "Starting benchmark suite"
-  let total   = 2000000 -- 200000000
-      range   = 10000000 -- 200000000
-      lookups = 1000000 -- 50000000
+  let multiplier = 5
+  let total   = 200000 * multiplier
+      range   = 10000000 * multiplier
+      lookups = 100000 * multiplier
   putStrLn $ concat
     [ "This benchmark will insert "
     , show total
@@ -73,7 +74,7 @@ lookupMany total b ctx = go 0 0
   go !n !s = if n < total
     then do
       m <- BTL.lookup ctx b n
-      go (n + 1) (s + fromMaybe 0 m) 
+      go (n + 1) (s + fromMaybe 0 m)  
     else return s
 
 lookupManyOffHeap :: Int -> BTC.BTree RealWorld Int Int c -> IO Int
@@ -92,7 +93,7 @@ onHeapBTree total range = do
   b0 <- BTL.new ctx
   let go !n !b = if n < total
         then do
-          let x = div (hashWithSalt mySalt n) range
+          let x = mod (hashWithSalt mySalt n) range
           b' <- BTL.insert ctx b x x
           go (n + 1) b'
         else return (b,ctx)
@@ -108,7 +109,7 @@ offHeapBTree token total range = do
   b0 <- BTC.new ctx
   let go !n !b = if n < total
         then do
-          let x = div (hashWithSalt mySalt n) range
+          let x = mod (hashWithSalt mySalt n) range
           b' <- BTC.insert ctx b x x
           go (n + 1) b'
         else return (b,ctx)

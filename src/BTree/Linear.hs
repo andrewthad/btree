@@ -51,6 +51,7 @@ new (Context degree) = do
   values <- newPrimArray (degree - 1)
   return (BTree szRef keys (ContentsValues values))
 
+{-# INLINABLE lookup #-}
 lookup :: forall m k v. (PrimMonad m, Ord k, Prim k, Prim v)
   => Context (PrimState m) -> BTree (PrimState m) k v -> k -> m (Maybe v)
 lookup (Context _) theNode k = go theNode
@@ -80,6 +81,7 @@ data Insert s k v
 uninitializedNode :: a
 uninitializedNode = error "unitializedNode: this should not be forced, b+ tree implementation has a mistake."
 
+{-# INLINE insert #-}
 insert :: (PrimMonad m, Ord k, Prim k, Prim v)
   => Context (PrimState m)
   -> BTree (PrimState m) k v
@@ -159,6 +161,7 @@ foldrPrimArrayPairs len f b0 ks vs = go (len - 1) b0
       go (ix - 1) b2
     else return b1
 
+{-# SPECIALIZE modifyWithM :: Context RealWorld -> BTree RealWorld Int Int -> Int -> (Maybe Int -> IO Int) -> IO (Int, BTree RealWorld Int Int) #-}
 {-# INLINABLE modifyWithM #-}
 modifyWithM :: forall m s k v. (PrimMonad m, Ord k, Prim k, Prim v)
   => Context s
