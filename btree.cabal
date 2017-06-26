@@ -1,6 +1,6 @@
 name: btree
 version: 0.1.0.0
--- synopsis:
+synopsis: B-Tree on the compact heap
 -- description:
 homepage: https://github.com/andrewthad/b-plus-tree#readme
 license: BSD3
