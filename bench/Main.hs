@@ -21,7 +21,7 @@ import Data.Maybe
 import System.Clock
 
 -- this specialization does not seem to work.
-{-# SPECIALIZE BTC.modifyWithM :: BTC.Context RealWorld c -> BTC.BTree RealWorld Int Int c -> Int -> (Maybe Int -> IO Int) -> IO (Int, BTC.BTree RealWorld Int Int c) #-}
+-- {-# SPECIALIZE BTC.modifyWithM :: BTC.Context RealWorld c -> BTC.BTree RealWorld Int Int c -> Int -> (Maybe Int -> IO Int) -> IO (Int, BTC.BTree RealWorld Int Int c) #-}
 
 main :: IO ()
 main = do
@@ -77,7 +77,7 @@ lookupMany total b ctx = go 0 0
       go (n + 1) (s + fromMaybe 0 m)  
     else return s
 
-lookupManyOffHeap :: Int -> BTC.BTree RealWorld Int Int c -> IO Int
+lookupManyOffHeap :: Int -> BTC.BTree Int Int RealWorld c -> IO Int
 lookupManyOffHeap total b = go 0 0
   where
   go !n !s = if n < total
@@ -103,7 +103,7 @@ offHeapBTree ::
      Token c 
   -> Int
   -> Int
-  -> IO (BTC.BTree RealWorld Int Int c, BTC.Context RealWorld c)
+  -> IO (BTC.BTree Int Int RealWorld c, BTC.Context RealWorld c)
 offHeapBTree token total range = do
   ctx <- BTC.newContext 100 token
   b0 <- BTC.new ctx

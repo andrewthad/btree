@@ -38,21 +38,21 @@ import qualified Data.Primitive.PrimArray as P
 main :: IO ()
 main = do
   putStrLn "Starting test suite"
-  withToken $ \c -> do
-    ctx <- BTC.newContext 3 c
-    b0 <- BTC.new ctx
-    b1 <- BTC.insert ctx b0 (1 :: Int) (1 :: Int)
-    b2 <- BTC.insert ctx b1 (2 :: Int) (2 :: Int)
-    b3 <- BTC.insert ctx b2 (3 :: Int) (3 :: Int)
-    -- b4 <- BTC.insert ctx b3 (4 :: Int) (4 :: Int)
-    -- b5 <- BTC.insert ctx b4 (5 :: Int) (5 :: Int)
-    -- b6 <- BTC.insert ctx b5 (6 :: Int) (6 :: Int)
-    -- b7 <- BTC.insert ctx b6 (7 :: Int) (7 :: Int)
-    print =<< BTC.lookup b3 3
-    -- print =<< BTC.toAscList ctx b2
-    return ()
-  -- defaultMain tests
-  -- basicBenchmarks
+  -- withToken $ \c -> do
+  --   ctx <- BTC.newContext 3 c
+  --   b0 <- BTC.new ctx :: IO (BTC.BTree Int Int RealWorld _)
+  --   b1 <- BTC.insert ctx b0 (1 :: Int) (1 :: Int)
+  --   b2 <- BTC.insert ctx b1 (2 :: Int) (2 :: Int)
+  --   b3 <- BTC.insert ctx b2 (3 :: Int) (3 :: Int)
+  --   b4 <- BTC.insert ctx b3 (4 :: Int) (4 :: Int)
+  --   b5 <- BTC.insert ctx b4 (5 :: Int) (5 :: Int)
+  --   b6 <- BTC.insert ctx b5 (6 :: Int) (6 :: Int)
+  --   b7 <- BTC.insert ctx b6 (7 :: Int) (7 :: Int)
+  --   print =<< BTC.lookup b7 3
+  --   putStrLn =<< BTC.debugMap ctx b7
+  --   return ()
+  defaultMain tests
+  basicBenchmarks
   putStrLn "Finished test suite"
 
 tests :: TestTree
@@ -141,7 +141,7 @@ unitTests = testGroup "Unit tests"
       actual @?= S.toAscList (S.fromList xs')
   , testCase "compact b-tree can be created" $ withToken $ \token -> do
       ctx <- BTC.newContext 5 token
-      _ <- BTC.new ctx :: IO (BTC.BTree RealWorld Word Word _)
+      _ <- BTC.new ctx :: IO (BTC.BTree Word Word RealWorld _)
       return ()
   ]
 
