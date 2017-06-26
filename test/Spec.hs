@@ -32,6 +32,7 @@ import qualified Data.List.NonEmpty as NE
 import qualified BTree as B
 import qualified BTree.Linear as BTL
 import qualified BTree.Compact as BTC
+import qualified BTree.Contractible as BTT
 import qualified Data.Set as S
 import qualified Data.Primitive.PrimArray as P
 
@@ -62,7 +63,7 @@ properties :: TestTree
 properties = testGroup "Properties" [scProps]
 
 smallcheckTests :: 
-     (forall n. (Show n, Ord n, Prim n) => Int -> [Positive n] -> Either Reason Reason)
+     (forall n. (Show n, Ord n, Prim n, Hashable n, Bounded n, Integral n) => Int -> [Positive n] -> Either Reason Reason)
   -> [TestTree]
 smallcheckTests f = 
   [ testPropDepth 3 "small maps of degree 3, all permutations, no splitting"
@@ -79,11 +80,11 @@ smallcheckTests f =
       (over doubletonSeriesB (f 3))
   , testPropDepth 10 "medium maps of degree 4, repeat keys likely, few permutations"
       (over doubletonSeriesB (f 4))
-  , testPropDepth 500 "large maps of degree 3, repeat keys certain, one permutation"
+  , testPropDepth 150 "large maps of degree 3, repeat keys certain, one permutation"
       (over singletonSeriesB (f 3))
-  , testPropDepth 500 "large maps of degree 6, one permutation"
+  , testPropDepth 150 "large maps of degree 6, one permutation"
       (over singletonSeriesA (f 6))
-  , testPropDepth 500 "large maps of degree 7, repeat keys certain, one permutation"
+  , testPropDepth 150 "large maps of degree 7, repeat keys certain, one permutation"
       (over singletonSeriesB (f 7))
   ]
 
@@ -91,6 +92,7 @@ scProps :: TestTree
 scProps = testGroup "smallcheck"
   [ testGroup "standard heap" (smallcheckTests ordering) 
   , testGroup "compact heap" (smallcheckTests orderingCompact)
+  , testGroup "compact heap nested" (smallcheckTests orderingNested)
   , testPropDepth 7 "standard heap lookup"
       (over (series :: Series IO [Positive Int]) (lookupAfterInsert 3))
   , testPropDepth 500 "standard heap bigger lookup"
@@ -219,7 +221,6 @@ ordering degree xs' =
     then Right "good"
     else Left (notice (show expected) (show actual) layout)
 
--- {-# INLINEABLE orderingCompact #-}
 orderingCompact :: (Show n, Ord n, Prim n)
   => Int -- ^ degree of b-tree
   -> [Positive n] -- ^ values to insert
@@ -235,6 +236,36 @@ orderingCompact degree xs' =
   in if actual == expected
     then Right "good"
     else Left (notice (show expected) (show actual) layout)
+
+-- let us begin the most dangerous game.
+orderingNested:: (Show n, Ord n, Prim n, Hashable n, Bounded n, Integral n)
+  => Int -- ^ degree of b-tree
+  -> [Positive n] -- ^ values to insert
+  -> Either Reason Reason
+orderingNested degree xs' = 
+  let xs = map getPositive xs'
+      e = runST $ withToken $ \c -> do
+        ctx <- BTT.newContext degree c
+        m0 <- BTT.new ctx
+        m1 <- foldlM
+          (\ !mtop !x -> do
+            let subValues = take 10 (iterate (fromIntegral . hashWithSalt 13 . (+ div maxBound 3)) x)
+            foldM ( \ !m !y -> do
+                (_,t) <- BTT.modifyWithM ctx m x (BTC.new ctx) $ \mbottom -> do
+                  fmap BTT.Replace (BTC.insert ctx mbottom y y)
+                return t
+              ) mtop subValues
+          ) m0 xs
+        runExceptT $ forM_ xs $ \x -> do
+          m <- lift $ BTT.lookup m1 x 
+          case m of
+            Nothing -> ExceptT (return (Left ("could not find " ++ show x ++ " in top b-tree")))
+            Just b -> do
+              n <- lift $ BTC.lookup b x
+              case n of
+                Nothing -> ExceptT (return (Left ("could not find " ++ show x ++ " in bottom b-tree")))
+                Just k -> return ()
+   in fmap (const "good") e
 
 notice :: String -> String -> String -> String
 notice expected actual layout = concat
