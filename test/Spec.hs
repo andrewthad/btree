@@ -68,6 +68,8 @@ smallcheckTests ::
 smallcheckTests f = 
   [ testPropDepth 3 "small maps of degree 3, all permutations, no splitting"
       (over (series :: Series IO [Positive Int]) (f 3))
+  , testPropDepth 4 "small maps of degree 3, all permutations, one split"
+      (over (series :: Series IO [Positive Int]) (f 3))
   , testPropDepth 7 "small maps of degree 3, all permutations"
       (over (series :: Series IO [Positive Int]) (f 3))
   , testPropDepth 7 "small maps of degree 4, all permutations"
@@ -142,8 +144,7 @@ unitTests = testGroup "Unit tests"
       actual <- return (runST (B.fromList (B.Context (BTL.Context 4)) xs' >>= B.toAscList))
       actual @?= S.toAscList (S.fromList xs')
   , testCase "compact b-tree can be created" $ withToken $ \token -> do
-      ctx <- BTC.newContext 5 token
-      _ <- BTC.new ctx :: IO (BTC.BTree Word Word RealWorld _)
+      _ <- BTC.new token 5 :: IO (BTC.BTree Word Word RealWorld _)
       return ()
   ]
 
@@ -185,9 +186,8 @@ lookupAfterInsertCompact degree xs' =
   let xs = map getPositive xs'
       expected = map (\x -> (x,x)) $ S.toAscList $ S.fromList xs
    in fmap (const "good") $ runST $ withToken $ \c -> do
-        ctx <- BTC.newContext degree c
-        m0 <- BTC.new ctx
-        m1 <- foldlM (\ !m !x -> BTC.insert ctx m x x) m0 xs
+        m0 <- BTC.new c degree
+        m1 <- foldlM (\ !m !x -> BTC.insert c m x x) m0 xs
         r1 <- foldlM (\e x -> case e of
             Right () -> do
               BTC.lookup m1 x >>= \case
@@ -229,30 +229,28 @@ orderingCompact degree xs' =
   let xs = map getPositive xs'
       expected = map (\x -> (x,x)) $ S.toAscList $ S.fromList xs
       (actual,layout) = runST $ withToken $ \c -> do
-        ctx <- BTC.newContext degree c
-        m0 <- BTC.new ctx
-        m1 <- foldlM (\ !m !x -> BTC.insert ctx m x x) m0 xs
-        (,) <$> BTC.toAscList ctx m1 <*> BTC.debugMap ctx m1
+        m0 <- BTC.new c degree
+        m1 <- foldlM (\ !m !x -> BTC.insert c m x x) m0 xs
+        (,) <$> BTC.toAscList m1 <*> BTC.debugMap m1
   in if actual == expected
     then Right "good"
     else Left (notice (show expected) (show actual) layout)
 
 -- let us begin the most dangerous game.
-orderingNested:: (Show n, Ord n, Prim n, Hashable n, Bounded n, Integral n)
+orderingNested :: (Show n, Ord n, Prim n, Hashable n, Bounded n, Integral n)
   => Int -- ^ degree of b-tree
   -> [Positive n] -- ^ values to insert
   -> Either Reason Reason
 orderingNested degree xs' = 
   let xs = map getPositive xs'
       e = runST $ withToken $ \c -> do
-        ctx <- BTT.newContext degree c
-        m0 <- BTT.new ctx
+        m0 <- BTT.new c degree
         m1 <- foldlM
           (\ !mtop !x -> do
             let subValues = take 10 (iterate (fromIntegral . hashWithSalt 13 . (+ div maxBound 3)) x)
             foldM ( \ !m !y -> do
-                (_,t) <- BTT.modifyWithM ctx m x (BTC.new ctx) $ \mbottom -> do
-                  fmap BTT.Replace (BTC.insert ctx mbottom y y)
+                (_,t) <- BTT.modifyWithM c m x (BTC.new c degree) $ \mbottom -> do
+                  fmap BTT.Replace (BTC.insert c mbottom y y)
                 return t
               ) mtop subValues
           ) m0 xs
@@ -297,13 +295,12 @@ singletonSeriesB = (fmap.fmap) Positive (scanSeries (\n -> [n + 73]) 0)
 
 sizeAfterInserts :: forall n. (Num n, Prim n, Ord n, Hashable n) => Proxy n -> n -> Int -> IO Word 
 sizeAfterInserts _ total degree = withToken $ \c -> do
-  ctx <- BTC.newContext degree c
-  m0 <- BTC.new ctx
+  m0 <- BTC.new c degree
   let go !ix !m = if ix < total
         then do
           let x = hashWithSalt 45237 (ix :: n)
               y = fromIntegral x :: n
-          m' <- BTC.insert ctx m y y
+          m' <- BTC.insert c m y y
           go (ix + 1) m'
         else return ()
   go 0 m0
@@ -311,12 +308,11 @@ sizeAfterInserts _ total degree = withToken $ \c -> do
 
 sizeAfterRepeatedInserts :: Int -> IO Word 
 sizeAfterRepeatedInserts total = withToken $ \c -> do
-  ctx <- BTC.newContext 8 c
-  m0 <- BTC.new ctx
+  m0 <- BTC.new c 8
   let go !ix !m = if ix < total
         then do
           -- same key every time
-          m' <- BTC.insert ctx m (99 :: Int) (ix :: Int)
+          m' <- BTC.insert c m (99 :: Int) (ix :: Int)
           go (ix + 1) m'
         else return ()
   go 0 m0
