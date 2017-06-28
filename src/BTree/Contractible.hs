@@ -145,14 +145,14 @@ contentsToFlattenContents !garbageValues !garbageNodes !c = case c of
 demandFlattenedContentsNodes :: FlattenedContents k v s c -> ContractedMutableArray (BNode k v) s c
 demandFlattenedContentsNodes (FlattenedContents _ _ nodes) = nodes
 
-data Insert k v s c
+data Insert k v s c r
   = Ok
-      !(v s c)
+      !r
       {-# UNPACK #-} !Int -- new size of left child
   | Split
       {-# NOUNPACK #-} !(BNode k v s c)
       !k
-      !(v s c)
+      !r
       {-# UNPACK #-} !Int
       -- ^ The new node that will go to the right,
       --   the key propagated to the parent,
@@ -212,24 +212,24 @@ lookup (BTree _ theNode) k = go theNode
         !node <- readContractedArray nodes ix
         go node
 
-data Decision a = Keep | Replace !a
+data Decision r a = Keep !r | Replace !r !a
 
 -- When we turn on this specialize pragma, it gets way faster
 -- for the particular case.
 -- {-# SPECIALIZE modifyWithM :: Token c -> BTree Int Int RealWorld c -> Int -> Int -> (Int -> IO (Decision Int)) -> IO (Int, BTree Int Int RealWorld c) #-}
 {-# INLINABLE modifyWithM #-}
-modifyWithM :: forall m k v c. (Ord k, Prim k, Contractible v, PrimMonad m)
+modifyWithM :: forall m k v c r. (Ord k, Prim k, Contractible v, PrimMonad m)
   => Token c
   -> BTree k v (PrimState m) c
   -> k
   -> m (v (PrimState m) c) -- ^ value to insert if key not found
-  -> (v (PrimState m) c -> m (Decision (v (PrimState m) c))) -- ^ modification to value if key is found
-  -> m (v (PrimState m) c, BTree k v (PrimState m) c)
+  -> (v (PrimState m) c -> m (Decision r (v (PrimState m) c))) -- ^ modification to value if key is found
+  -> m (r, BTree k v (PrimState m) c)
 modifyWithM !token (BTree !degree !root) !k !newValue alter = do
   !ins <- go root
   case ins of
-    Ok !v !newNodeSz -> return (v,BTree degree (root { _bnodeSize = newNodeSz }))
-    Split !rightNode !newRootKey !v !newLeftSize -> do
+    Ok !r !newNodeSz -> return (r,BTree degree (root { _bnodeSize = newNodeSz }))
+    Split !rightNode !newRootKey !r !newLeftSize -> do
       newRootKeys <- newPrimArray (degree - 1)
       writePrimArray newRootKeys 0 newRootKey
       !newRootChildren <- newContractedArray token degree
@@ -237,9 +237,9 @@ modifyWithM !token (BTree !degree !root) !k !newValue alter = do
       !newRoot@(BNode _ _ (FlattenedContents _ _ cmptRootChildren)) <- mkBTree token newRootChildren 1 newRootKeys (ContentsNodes newRootChildren)
       writeContractedArray cmptRootChildren 0 leftNode
       writeContractedArray cmptRootChildren 1 rightNode
-      return (v,BTree degree newRoot)
+      return (r,BTree degree newRoot)
   where
-  go :: BNode k v (PrimState m) c -> m (Insert k v (PrimState m) c)
+  go :: BNode k v (PrimState m) c -> m (Insert k v (PrimState m) c r)
   go (BNode !sz !keys !c) = do
     case flattenContentsToContents c of
       ContentsValues !values -> do
@@ -247,15 +247,15 @@ modifyWithM !token (BTree !degree !root) !k !newValue alter = do
         if ix < 0
           then do
             let !gtIx = decodeGtIndex ix
-            v <- newValue >>= \v0 -> alter v0 >>= \case
-              Keep -> return v0
-              Replace v1 -> return v1
+            (v,r) <- newValue >>= \v0 -> alter v0 >>= \case
+              Keep r -> return (v0,r)
+              Replace r v1 -> return (v1,r)
             if sz < degree - 1
               then do
                 -- We have enough space
                 unsafeInsertPrimArray sz gtIx k keys
                 unsafeInsertContractedArray sz gtIx v values
-                return (Ok v (sz + 1))
+                return (Ok r (sz + 1))
               else do
                 -- We do not have enough space. The node must be split.
                 let !leftSize = div sz 2
@@ -285,14 +285,14 @@ modifyWithM !token (BTree !degree !root) !k !newValue alter = do
                     unsafeInsertPrimArray rightSize (gtIx - leftSize) k rightKeys
                     unsafeInsertContractedArray rightSize (gtIx - leftSize) v rightValues
                 !propagated <- readPrimArray rightKeys 0
-                return (Split newTree propagated v newLeftSz)
+                return (Split newTree propagated r newLeftSz)
           else do
             !v <- readContractedArray values ix
             !dec <- alter v
-            !v' <- case dec of
-              Keep -> return v
-              Replace v' -> writeContractedArray values ix v' >> return v'
-            return (Ok v' sz)
+            !r <- case dec of
+              Keep r -> return r
+              Replace r v' -> writeContractedArray values ix v' >> return r
+            return (Ok r sz)
       ContentsNodes nodes -> do
         !(!gtIx,!isEq) <- findIndexGte keys k sz
         -- case e of

@@ -249,8 +249,9 @@ orderingNested degree xs' =
           (\ !mtop !x -> do
             let subValues = take 10 (iterate (fromIntegral . hashWithSalt 13 . (+ div maxBound 3)) x)
             foldM ( \ !m !y -> do
-                (_,t) <- BTT.modifyWithM c m x (BTC.new c degree) $ \mbottom -> do
-                  fmap BTT.Replace (BTC.insert c mbottom y y)
+                ((),t) <- BTT.modifyWithM c m x (BTC.new c degree) $ \mbottom -> do
+                  bt <- BTC.insert c mbottom y y
+                  return (BTT.Replace () bt)
                 return t
               ) mtop subValues
           ) m0 xs
