@@ -22,6 +22,8 @@ library
     BTree.Array
     BTree.Compact
     BTree.Contractible
+    BTree.ContractibleForall
+    BTree.Store
   build-depends:
       base >= 4.10 && < 4.11
     , ghc-prim >= 0.5 && < 0.6

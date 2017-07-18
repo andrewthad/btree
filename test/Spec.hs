@@ -26,34 +26,25 @@ import Data.Foldable
 import Data.Primitive.Compact (withToken,getSizeOfCompact)
 import System.IO.Unsafe
 import Data.Hashable
+import Foreign.Storable (Storable)
 
 import qualified Data.List as L
 import qualified Data.List.NonEmpty as NE
 import qualified BTree as B
 import qualified BTree.Linear as BTL
-import qualified BTree.Compact as BTC
-import qualified BTree.Contractible as BTT
+import qualified BTree.Store as BTS
 import qualified Data.Set as S
 import qualified Data.Primitive.PrimArray as P
 
 main :: IO ()
 main = do
   putStrLn "Starting test suite"
-  -- withToken $ \c -> do
-  --   ctx <- BTC.newContext 3 c
-  --   b0 <- BTC.new ctx :: IO (BTC.BTree Int Int RealWorld _)
-  --   b1 <- BTC.insert ctx b0 (1 :: Int) (1 :: Int)
-  --   b2 <- BTC.insert ctx b1 (2 :: Int) (2 :: Int)
-  --   b3 <- BTC.insert ctx b2 (3 :: Int) (3 :: Int)
-  --   b4 <- BTC.insert ctx b3 (4 :: Int) (4 :: Int)
-  --   b5 <- BTC.insert ctx b4 (5 :: Int) (5 :: Int)
-  --   b6 <- BTC.insert ctx b5 (6 :: Int) (6 :: Int)
-  --   b7 <- BTC.insert ctx b6 (7 :: Int) (7 :: Int)
-  --   print =<< BTC.lookup b7 3
-  --   putStrLn =<< BTC.debugMap ctx b7
-  --   return ()
+  -- BTS.with $ \bt0 -> do
+  --   bt1 <- BTS.insert bt0 (4 :: Int) 'x'
+  --   bt2 <- BTS.insert bt1 3 'z'
+  --   BTS.toAscList bt2 >>= print 
   defaultMain tests
-  basicBenchmarks
+  -- basicBenchmarks
   putStrLn "Finished test suite"
 
 tests :: TestTree
@@ -63,7 +54,7 @@ properties :: TestTree
 properties = testGroup "Properties" [scProps]
 
 smallcheckTests :: 
-     (forall n. (Show n, Ord n, Prim n, Hashable n, Bounded n, Integral n) => Int -> [Positive n] -> Either Reason Reason)
+     (forall n. (Storable n, Show n, Ord n, Prim n, Hashable n, Bounded n, Integral n) => Int -> [Positive n] -> Either Reason Reason)
   -> [TestTree]
 smallcheckTests f = 
   [ testPropDepth 3 "small maps of degree 3, all permutations, no splitting"
@@ -93,8 +84,7 @@ smallcheckTests f =
 scProps :: TestTree
 scProps = testGroup "smallcheck"
   [ testGroup "standard heap" (smallcheckTests ordering) 
-  , testGroup "compact heap" (smallcheckTests orderingCompact)
-  , testGroup "compact heap nested" (smallcheckTests orderingNested)
+  , testGroup "unmanaged heap" (smallcheckTests orderingStorable)
   , testPropDepth 7 "standard heap lookup"
       (over (series :: Series IO [Positive Int]) (lookupAfterInsert 3))
   , testPropDepth 500 "standard heap bigger lookup"
@@ -143,8 +133,7 @@ unitTests = testGroup "Unit tests"
           xs' = map (\x -> (x,x)) xs
       actual <- return (runST (B.fromList (B.Context (BTL.Context 4)) xs' >>= B.toAscList))
       actual @?= S.toAscList (S.fromList xs')
-  , testCase "compact b-tree can be created" $ withToken $ \token -> do
-      _ <- BTC.new token 5 :: IO (BTC.BTree Word Word RealWorld _)
+  , testCase "unmanaged b-tree can be created" $ BTS.with $ \_ -> do
       return ()
   ]
 
@@ -178,26 +167,25 @@ lookupAfterInsert degree xs' =
             else Left ("looked up " ++ show x ++ " but found wrong value " ++ show y)
         return (r1 >> r2)
 
-lookupAfterInsertCompact :: (Show n, Ord n, Prim n)
+lookupAfterInsertUnmanaged :: (Show n, Ord n, Prim n)
   => Int -- ^ degree of b-tree
   -> [Positive n] -- ^ values to insert
   -> Either Reason Reason
-lookupAfterInsertCompact degree xs' =
+lookupAfterInsertUnmanaged degree xs' =
   let xs = map getPositive xs'
       expected = map (\x -> (x,x)) $ S.toAscList $ S.fromList xs
-   in fmap (const "good") $ runST $ withToken $ \c -> do
-        m0 <- BTC.new c degree
-        m1 <- foldlM (\ !m !x -> BTC.insert c m x x) m0 xs
+   in fmap (const "good") $ unsafePerformIO $ BTS.with $ \m0 -> do
+        m1 <- foldlM (\ !m !x -> BTS.insert c m x x) m0 xs
         r1 <- foldlM (\e x -> case e of
             Right () -> do
-              BTC.lookup m1 x >>= \case
+              BTS.lookup m1 x >>= \case
                 Nothing -> return $ Left ("could not find " ++ show x ++ " after inserting it")
                 Just y -> return $ if x == y
                   then Right ()
                   else Left ("looked up " ++ show x ++ " but found wrong value " ++ show y)
             Left err -> return (Left err)
           ) (Right ()) xs
-        r2 <- runExceptT $ forM_ xs $ \x -> lift (BTC.lookup m1 x) >>= \case
+        r2 <- runExceptT $ forM_ xs $ \x -> lift (BTS.lookup m1 x) >>= \case
           Nothing -> ExceptT $ return $ Left ("could not find " ++ show x ++ " after inserting it")
           Just y -> ExceptT $ return $ if x == y
             then Right ()
@@ -236,6 +224,21 @@ orderingCompact degree xs' =
     then Right "good"
     else Left (notice (show expected) (show actual) layout)
 
+orderingStorable :: (Show n, Ord n, Storable n)
+  => Int -- ^ degree of b-tree, ignored
+  -> [Positive n] -- ^ values to insert
+  -> Either Reason Reason
+orderingStorable degree xs' = 
+  let xs = map getPositive xs'
+      expected = map (\x -> (x,x)) $ S.toAscList $ S.fromList xs
+      result = unsafePerformIO $ BTS.with $ \m0 -> do
+        m1 <- foldlM (\ !m !x -> BTS.insert m x x) m0 xs
+        actual <- BTS.toAscList m1
+        return $ if actual == expected
+          then Right "good"
+          else Left (notice (show expected) (show actual) "layout not available")
+   in result
+
 -- let us begin the most dangerous game.
 orderingNested :: (Show n, Ord n, Prim n, Hashable n, Bounded n, Integral n)
   => Int -- ^ degree of b-tree
@@ -270,7 +273,7 @@ notice :: String -> String -> String -> String
 notice expected actual layout = concat
   [ "expected: "
   , expected
-  , ", actual: "
+  , ",\n actual: "
   , actual
   , ", layout:\n"
   , layout
@@ -294,45 +297,5 @@ singletonSeriesA = (fmap.fmap) Positive (scanSeries (\n -> [n + 26399]) 0)
 singletonSeriesB :: Series m [Positive Word8]
 singletonSeriesB = (fmap.fmap) Positive (scanSeries (\n -> [n + 73]) 0)
 
-sizeAfterInserts :: forall n. (Num n, Prim n, Ord n, Hashable n) => Proxy n -> n -> Int -> IO Word 
-sizeAfterInserts _ total degree = withToken $ \c -> do
-  m0 <- BTC.new c degree
-  let go !ix !m = if ix < total
-        then do
-          let x = hashWithSalt 45237 (ix :: n)
-              y = fromIntegral x :: n
-          m' <- BTC.insert c m y y
-          go (ix + 1) m'
-        else return ()
-  go 0 m0
-  getSizeOfCompact c
-
-sizeAfterRepeatedInserts :: Int -> IO Word 
-sizeAfterRepeatedInserts total = withToken $ \c -> do
-  m0 <- BTC.new c 8
-  let go !ix !m = if ix < total
-        then do
-          -- same key every time
-          m' <- BTC.insert c m (99 :: Int) (ix :: Int)
-          go (ix + 1) m'
-        else return ()
-  go 0 m0
-  getSizeOfCompact c
-
-basicBenchmarks :: IO ()
-basicBenchmarks = do
-  let degrees = [50,105]
-      sizes = [10000,15000,30000]
-      pairs = (,) <$> degrees <*> sizes
-  forM_ pairs $ \(degree,size) -> do
-    sz <- sizeAfterInserts (Proxy :: Proxy Int64) (fromIntegral size) degree
-    putStrLn ("Bytes of " ++ show size ++ " distinct inserts (Int64) into b-tree of degree " ++ show degree ++ ": " ++ show sz)
-  forM_ pairs $ \(degree,size) -> do
-    sz <- sizeAfterInserts (Proxy :: Proxy Int32) (fromIntegral size) degree
-    putStrLn ("Bytes of " ++ show size ++ " distinct inserts (Int32) into b-tree of degree " ++ show degree ++ ": " ++ show sz)
-  putStrLn "Repeated Inserts"
-  forM_ sizes $ \size -> do
-    sz <- sizeAfterRepeatedInserts size
-    putStrLn ("Bytes of " ++ show size ++ " repeated inserts into b-tree: " ++ show sz)
  
 

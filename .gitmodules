@@ -4,3 +4,6 @@
 [submodule "prim-array"]
 	path = prim-array
 	url = https://github.com/andrewthad/prim-array
+[submodule "hashable"]
+	path = hashable
+	url = https://github.com/tibbe/hashable.git
