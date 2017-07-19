@@ -299,6 +299,7 @@ data Insert k v r
     -- The new node that will go to the right,
     -- the key propagated to the parent,
     -- the inserted value
+  | TooSmall !r
 
 {-# INLINE insert #-}
 insert :: (Ord k, Storable k, Regioned v)
@@ -449,8 +450,12 @@ modifyWithPtr (BTree !height !root) !k !postInitializeElemOff alterElemOff = do
               return (Split newNodePtr propagated r)
         else do
           -- The key was already present in this leaf node
-          !r <- alterElemOff (getArr values) ix
-          return (Ok r)
+          !(r,dec) <- alterElemOff (getArr values) ix
+          case dec of
+            Keep -> return (Ok r)
+            Delete -> do
+              removeArr sz ix keys
+              removeArrDeinit sz ix values
 
 copyArr :: forall a. Storable a
   => Arr a -- ^ dest
