@@ -2,17 +2,20 @@
 {-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
 {-# OPTIONS_GHC -Wall -Werror #-}
 
 module BTree.Store
   ( BTree
+  , Regioned(..)
   , new
   , free
   , with
+  , with_
   , lookup
   , insert
-  , modifyWithM
+  , modifyWithM_
   , foldrWithKey
   , toAscList
   ) where
@@ -23,7 +26,7 @@ import Foreign.Ptr
 import Foreign.Marshal.Alloc hiding (free)
 import Foreign.Marshal.Array
 import Data.Bits
-import Control.Exception (bracket)
+import Data.Word
 import qualified Foreign.Marshal.Alloc as FMA
 
 data BTree k v = BTree 
@@ -32,12 +35,20 @@ data BTree k v = BTree
 
 data Node k v
 
-class Storable a => Allocator a where
+class Storable a => Regioned a where
   initialize :: Ptr a -> IO ()
   -- ^ Initialize the memory at a pointer. An implementation
   --   of this function may do nothing, or if the data contains
   --   more pointers, @initialize@ may allocate additional memory.
   deinitialize :: Ptr a -> IO ()
+  initializeElemOff :: Ptr a -> Int -> IO ()
+  -- ^ Can be overridden for efficiency
+  initializeElemOff ptr ix = do
+    initialize (plusPtr ptr (ix * sizeOf (undefined :: a)) :: Ptr a)
+  deinitializeElemOff :: Ptr a -> Int -> IO ()
+  -- ^ Can be overridden for efficiency
+  deinitializeElemOff ptr ix =
+    deinitialize (plusPtr ptr (ix * sizeOf (undefined :: a)) :: Ptr a)
   -- ^ Free any memory in the data structure pointed to.
   initializeElems :: Ptr a -> Int -> IO ()
   -- ^ Initialize a pointer representing an array with
@@ -64,12 +75,20 @@ class Storable a => Allocator a where
       else return ()
 
 instance Storable (BTree k v) where
-  
+  sizeOf _ = 2 * sizeOf (undefined :: Int)
+  alignment _ = alignment (undefined :: Int)
+  peek ptr = do
+    height <- peekElemOff (castPtr ptr :: Ptr Int) 0
+    root <- peekElemOff (castPtr ptr :: Ptr (Ptr (Node k v))) 1
+    return (BTree height root)
+  poke ptr (BTree height root) = do
+    pokeElemOff (castPtr ptr :: Ptr Int) 0 height
+    pokeElemOff (castPtr ptr :: Ptr (Ptr (Node k v))) 1 root
 
 -- this instance relies on Int and Ptr being the same
 -- size. this seems to be true for everything that
 -- GHC targets.
-instance (Storable k, Storable v) => Allocator (BTree k v) where
+instance (Storable k, Regioned v) => Regioned (BTree k v) where
   initialize ptr = do
     pokeElemOff (castPtr ptr :: Ptr Int) 0 (0 :: Int)
     pokeElemOff (castPtr ptr :: Ptr (Ptr (Node k v))) 1 =<< newNode 0
@@ -77,6 +96,56 @@ instance (Storable k, Storable v) => Allocator (BTree k v) where
     bt <- peek ptr
     free bt
 
+newtype Uninitialized a = Uninitialized a
+  deriving (Storable)
+
+instance Storable a => Regioned (Uninitialized a) where
+  initialize _ = return ()
+  deinitialize _ = return ()
+  initializeElemOff _ _ = return ()
+  deinitializeElemOff _ _ = return ()
+  initializeElems _ _ = return ()
+  deinitializeElems _ _ = return ()
+
+instance Regioned Word8 where
+  initialize _ = return ()
+  deinitialize _ = return ()
+  initializeElemOff _ _ = return ()
+  deinitializeElemOff _ _ = return ()
+  initializeElems _ _ = return ()
+  deinitializeElems _ _ = return ()
+
+instance Regioned Word16 where
+  initialize _ = return ()
+  deinitialize _ = return ()
+  initializeElemOff _ _ = return ()
+  deinitializeElemOff _ _ = return ()
+  initializeElems _ _ = return ()
+  deinitializeElems _ _ = return ()
+
+instance Regioned Word where
+  initialize _ = return ()
+  deinitialize _ = return ()
+  initializeElemOff _ _ = return ()
+  deinitializeElemOff _ _ = return ()
+  initializeElems _ _ = return ()
+  deinitializeElems _ _ = return ()
+
+instance Regioned Int where
+  initialize _ = return ()
+  deinitialize _ = return ()
+  initializeElemOff _ _ = return ()
+  deinitializeElemOff _ _ = return ()
+  initializeElems _ _ = return ()
+  deinitializeElems _ _ = return ()
+
+instance Regioned Char where
+  initialize _ = return ()
+  deinitialize _ = return ()
+  initializeElemOff _ _ = return ()
+  deinitializeElemOff _ _ = return ()
+  initializeElems _ _ = return ()
+  deinitializeElems _ _ = return ()
 
 newtype Arr a = Arr { getArr :: Ptr a }
 data KeysValues k v = KeysValues !(Arr k) !(Arr v)
@@ -101,11 +170,13 @@ new = do
 
 -- | Release all memory allocated by the b-tree. Do not attempt
 --   to use the b-tree after calling this.
-free :: forall k v. (Storable k, Storable v) => BTree k v -> IO ()
+free :: forall k v. (Storable k, Regioned v) => BTree k v -> IO ()
 free (BTree height root) = go height root
   where
   branchDegree :: Int
   !branchDegree = calcBranchDegree root
+  childDegree :: Int
+  !childDegree = calcChildDegree root
   go :: Int -> Ptr (Node k v) -> IO ()
   go n ptrNode = if n > 0
     then do
@@ -113,10 +184,24 @@ free (BTree height root) = go height root
       let KeysNodes _ nodes = readNodeKeysNodes branchDegree ptrNode
       arrMapM_ (go (n - 1)) (sz + 1) nodes
       FMA.free ptrNode
-    else FMA.free ptrNode
+    else do
+      sz <- readNodeSize ptrNode
+      let KeysValues _ values = readNodeKeysValues childDegree ptrNode
+      deinitializeElems (getArr values) sz
+      FMA.free ptrNode
 
-with :: (Storable k, Storable v) => (BTree k v -> IO a) -> IO a
-with = bracket new free
+with :: (Storable k, Regioned v) => (BTree k v -> IO (a, BTree k v)) -> IO a
+with f = do
+  initial <- new
+  (a,final) <- f initial
+  free final
+  return a
+
+with_ :: (Storable k, Regioned v) => (BTree k v -> IO (BTree k v)) -> IO ()
+with_ f = do
+  initial <- new
+  final <- f initial
+  free final
 
 newNode :: forall k v. (Storable k, Storable v)
   => Int -- ^ initial size, if you pick something greater than 0,
@@ -126,11 +211,10 @@ newNode n = do
   -- We would really like to ensure that this is aligned to a
   -- 4k boundary, but malloc does not guarentee this. I think
   -- that posix_memalign should work, but whatever.
-  ptr <- mallocBytes 4096
+  ptr <- mallocBytes maxSize
   poke ptr n
   return (castPtr ptr)
   
-
 readArr :: Storable a => Arr a -> Int -> IO a
 readArr (Arr ptr) ix = peekElemOff ptr ix
 
@@ -164,7 +248,8 @@ readNodeKeysNodes degree ptr1 =
    in KeysNodes keys (Arr ptr3)
 
 maxSize :: Int
-maxSize = 4096
+maxSize = 4096 - 2 * sizeOf (undefined :: Int)
+-- maxSize = 200
 
 -- not actually sure if this is really correct.
 calcBranchDegree :: forall k v. (Storable k, Storable v) => Ptr (Node k v) -> Int
@@ -208,35 +293,48 @@ lookup (BTree height rootNode) k = go height rootNode
           v <- readArr values ix
           return (Just v)
 
-data Decision a = Keep | Replace !a
-
-data Insert k v
-  = Ok !v
-  | Split {-# NOUNPACK #-} !(Ptr (Node k v)) !k !v
+data Insert k v r
+  = Ok !r
+  | Split !(Ptr (Node k v)) !k !r
     -- The new node that will go to the right,
     -- the key propagated to the parent,
     -- the inserted value
 
 {-# INLINE insert #-}
-insert :: (Ord k, Storable k, Storable v)
+insert :: (Ord k, Storable k, Regioned v)
   => BTree k v
   -> k
   -> v
   -> IO (BTree k v)
 insert !m !k !v = do
-  !(!_,!node) <- modifyWithM m k v (\_ -> return (Replace v))
+  !(!(),!node) <- modifyWithPtr m k
+    (\ptr ix -> pokeElemOff ptr ix v)
+    (\ptr ix -> pokeElemOff ptr ix v)
   return node
 
-modifyWithM :: forall k v. (Ord k, Storable k, Storable v)
+data Decision = Keep | Delete
+
+modifyWithM_ :: forall k v. (Ord k, Storable k, Regioned v)
   => BTree k v 
   -> k
-  -> v -- ^ value to insert if key not found
-  -> (v -> IO (Decision v)) -- ^ modification to value if key is found
-  -> IO (v, BTree k v)
-modifyWithM (BTree !height !root) !k !newValue alter = do
+  -> (v -> IO v) -- ^ value modification, happens for newly inserted elements and for previously existing elements
+  -> IO (BTree k v)
+modifyWithM_ bt k alter = do
+  (_, bt') <- modifyWithPtr bt k
+    (\ptr ix -> peekElemOff ptr ix >>= alter >>= pokeElemOff ptr ix)
+    (\ptr ix -> peekElemOff ptr ix >>= alter >>= pokeElemOff ptr ix)
+  return bt'
+
+modifyWithPtr :: forall k v r. (Ord k, Storable k, Regioned v)
+  => BTree k v 
+  -> k
+  -> (Ptr v -> Int -> IO (r,Decision)) -- ^ modifications to newly inserted value after initialization
+  -> (Ptr v -> Int -> IO (r,Decision)) -- ^ modification to value if key is found
+  -> IO (r, BTree k v)
+modifyWithPtr (BTree !height !root) !k !postInitializeElemOff alterElemOff = do
   !ins <- go height root
   case ins of
-    Ok !v -> return (v,BTree height root)
+    Ok !v -> return (v, BTree height root)
     Split !rightNode !newRootKey !v -> do
       newRoot <- newNode 1
       let KeysNodes keys nodes = readNodeKeysNodes branchDegree newRoot
@@ -248,7 +346,7 @@ modifyWithM (BTree !height !root) !k !newValue alter = do
   where
   branchDegree :: Int
   !branchDegree = calcBranchDegree root
-  go :: Int -> Ptr (Node k v) -> IO (Insert k v)
+  go :: Int -> Ptr (Node k v) -> IO (Insert k v r)
   go n ptrNode = if n > 0
     then do
       sz <- readNodeSize ptrNode
@@ -299,14 +397,22 @@ modifyWithM (BTree !height !root) !k !newValue alter = do
       if ix < 0
         then do
           let !gtIx = decodeGtIndex ix
-              !v = newValue
           if sz < childDegree - 1
             then do
               -- We have enough space
-              writeNodeSize ptrNode (sz + 1)
               insertArr sz gtIx k keys
-              insertArr sz gtIx v values
-              return (Ok v)
+              (r,dec) <- insertInitArr sz gtIx values $ \thePtr theIx -> do
+                initializeElemOff thePtr theIx
+                postInitializeElemOff thePtr theIx
+              case dec of
+                Keep -> writeNodeSize ptrNode (sz + 1)
+                Delete -> do
+                  -- honestly, an end user wanting to immidiately
+                  -- delete a value after creating it is insane,
+                  -- but we support it nevertheless.
+                  removeArr (sz + 1) gtIx keys
+                  removeArrDeinit (sz + 1) gtIx values
+              return (Ok r)
             else do
               -- We do not have enough space. The node must be split.
               let !leftSize = half sz
@@ -319,12 +425,14 @@ modifyWithM (BTree !height !root) !k !newValue alter = do
               newNodePtr <- newNode actualRightSz
               writeNodeSize ptrNode newLeftSz
               let KeysValues rightKeys rightValues = readNodeKeysValues childDegree newNodePtr
-              if gtIx < leftSize
+              r <- if gtIx < leftSize
                 then do
                   copyArr rightKeys 0 leftKeys leftSize rightSize
                   copyArr rightValues 0 leftValues leftSize rightSize
                   insertArr leftSize gtIx k leftKeys
-                  insertArr leftSize gtIx v leftValues
+                  insertInitArr leftSize gtIx leftValues $ \thePtr theIx -> do
+                    initializeElemOff thePtr theIx
+                    postInitializeElemOff thePtr theIx
                 else do
                   -- Currently, we're copying from left to right and
                   -- then doing another copy from right to right. We
@@ -334,16 +442,15 @@ modifyWithM (BTree !height !root) !k !newValue alter = do
                   copyArr rightKeys 0 leftKeys leftSize rightSize
                   copyArr rightValues 0 leftValues leftSize rightSize
                   insertArr rightSize (gtIx - leftSize) k rightKeys
-                  insertArr rightSize (gtIx - leftSize) v rightValues
+                  insertInitArr rightSize (gtIx - leftSize) rightValues $ \thePtr theIx -> do
+                    initializeElemOff thePtr theIx
+                    postInitializeElemOff thePtr theIx
               !propagated <- readArr rightKeys 0
-              return (Split newNodePtr propagated v)
+              return (Split newNodePtr propagated r)
         else do
-          !v <- readArr values ix
-          !dec <- alter v
-          !v' <- case dec of
-            Keep -> return v
-            Replace v' -> writeArr values ix v' >> return v'
-          return (Ok v')
+          -- The key was already present in this leaf node
+          !r <- alterElemOff (getArr values) ix
+          return (Ok r)
 
 copyArr :: forall a. Storable a
   => Arr a -- ^ dest
@@ -366,6 +473,36 @@ insertArr :: Storable a
 insertArr !sz !i !x !arr = do
   copyArr arr (i + 1) arr i (sz - i)
   writeArr arr i x
+
+{-# INLINE removeArrDeinit #-}
+removeArrDeinit :: Regioned a
+  => Int -- ^ Size of the original array
+  -> Int -- ^ Index
+  -> Arr a -- ^ Array to modify
+  -> IO ()
+removeArrDeinit !sz !i !arr = do
+  deinitializeElemOff (getArr arr) i
+  copyArr arr i arr (i + 1) (sz - i - 1)
+
+{-# INLINE removeArr #-}
+removeArr :: Storable a
+  => Int -- ^ Size of the original array
+  -> Int -- ^ Index
+  -> Arr a -- ^ Array to modify
+  -> IO ()
+removeArr !sz !i !arr = do
+  copyArr arr i arr (i + 1) (sz - i - 1)
+
+{-# INLINE insertInitArr #-}
+insertInitArr :: forall a r. Storable a
+  => Int -- ^ Size of the original array
+  -> Int -- ^ Index
+  -> Arr a -- ^ Array to modify
+  -> (Ptr a -> Int -> IO r)
+  -> IO r
+insertInitArr !sz !i !arr@(Arr ptr0) f = do
+  copyArr arr (i + 1) arr i (sz - i)
+  f ptr0 i
 
 -- | This lookup is O(log n). It provides the index of the
 --   first element greater than the argument.
@@ -496,5 +633,3 @@ toAscList = foldrWithKey f []
   where
   f :: k -> v -> [(k,v)] -> IO [(k,v)]
   f k v xs = return ((k,v) : xs)
-
-
