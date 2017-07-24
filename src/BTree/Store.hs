@@ -17,6 +17,7 @@ module BTree.Store
   , insert
   , delete
   , modifyWithM_
+  , modifyWithM
   , foldrWithKey
   , toAscList
   ) where
@@ -344,6 +345,25 @@ modifyWithM_ bt k alter = do
     (Right (\ptr ix -> peekElemOff ptr ix >>= alter >>= pokeElemOff ptr ix))
     (\ptr ix -> peekElemOff ptr ix >>= alter >>= pokeElemOff ptr ix >>= \_ -> return ((),Keep))
   return bt'
+
+modifyWithM :: forall k v a. (Ord k, Storable k, Regioned v)
+  => BTree k v 
+  -> k
+  -> (v -> IO (a, v)) -- ^ value modification, happens for newly inserted elements and for previously existing elements
+  -> IO (a, BTree k v)
+modifyWithM bt k alter = do
+  (a, bt') <- modifyWithPtr bt k
+    (Right (\ptr ix -> do
+      (a,v') <- alter =<< peekElemOff ptr ix
+      pokeElemOff ptr ix v'
+      return a
+    ))
+    (\ptr ix -> do
+      (a,v') <- alter =<< peekElemOff ptr ix
+      pokeElemOff ptr ix v'
+      return (a,Keep)
+    )
+  return (a,bt')
 
 modifyWithPtr :: forall k v r. (Ord k, Storable k, Regioned v)
   => BTree k v 
