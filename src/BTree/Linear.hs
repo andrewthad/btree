@@ -18,10 +18,11 @@ module BTree.Linear
   ) where
 
 import Prelude hiding (lookup)
-import Data.Primitive hiding (fromList)
 import Data.Primitive.MutVar
 import Control.Monad
 import Data.Foldable (foldlM)
+import Data.Primitive (MutableArray,Prim)
+import qualified Data.Primitive as P
 
 import Data.Primitive.PrimArray
 import Control.Monad.Primitive
@@ -69,7 +70,7 @@ lookup (Context _) theNode k = go theNode
             return (Just v)
       ContentsNodes nodes -> do
         ix <- findIndexBetween keys k sz
-        go =<< readArray nodes ix
+        go =<< P.readArray nodes ix
 
 data Insert s k v
   = Ok !v
@@ -138,7 +139,7 @@ foldrArray len f b0 arr = go (len - 1) b0
   go :: Int -> b -> m b
   go !ix !b1 = if ix >= 0
     then do
-      a <- readArray arr ix
+      a <- P.readArray arr ix
       b2 <- f a b1
       go (ix - 1) b2
     else return b1
@@ -178,9 +179,9 @@ modifyWithM (Context degree) root k alter = do
       newRootSz <- newMutVar 1
       newRootKeys <- newPrimArray (degree - 1)
       writePrimArray newRootKeys 0 newRootKey
-      newRootChildren <- newArray degree uninitializedNode
-      writeArray newRootChildren 0 leftNode
-      writeArray newRootChildren 1 rightNode
+      newRootChildren <- P.newArray degree uninitializedNode
+      P.writeArray newRootChildren 0 leftNode
+      P.writeArray newRootChildren 1 rightNode
       let newRoot = BTree newRootSz newRootKeys (ContentsNodes newRootChildren)
       return (v,newRoot)
   where
@@ -244,7 +245,7 @@ modifyWithM (Context degree) root k alter = do
         -- case e of
         --   Right _ -> error "write Right case"
         --   Left gtIx -> do
-        node <- readArray nodes (if isEq then gtIx + 1 else gtIx)
+        node <- P.readArray nodes (if isEq then gtIx + 1 else gtIx)
         ins <- go node
         case ins of
           Ok v -> return (Ok v)
@@ -260,14 +261,14 @@ modifyWithM (Context degree) root k alter = do
                   leftNodes = nodes
               middleKey <- readPrimArray keys middleIx
               rightKeys :: MutablePrimArray (PrimState m) k <- newPrimArray (degree - 1)
-              rightNodes <- newArray degree uninitializedNode
+              rightNodes <- P.newArray degree uninitializedNode
               rightSzRef <- newMutVar 0 -- this always gets replaced
               let leftSize = middleIx
                   rightSize = sz - leftSize
               if middleIx >= gtIx
                 then do
                   copyMutablePrimArray rightKeys 0 leftKeys (leftSize + 1) (rightSize - 1)
-                  copyMutableArray rightNodes 0 leftNodes (leftSize + 1) rightSize
+                  P.copyMutableArray rightNodes 0 leftNodes (leftSize + 1) rightSize
                   unsafeInsertPrimArray leftSize gtIx propagated leftKeys
                   unsafeInsertArray (leftSize + 1) (gtIx + 1) rightNode leftNodes
                   writeMutVar szRef (leftSize + 1)
@@ -277,7 +278,7 @@ modifyWithM (Context degree) root k alter = do
                   -- then doing another copy from right to right. We can do better.
                   -- There is a similar note further up.
                   copyMutablePrimArray rightKeys 0 leftKeys (leftSize + 1) (rightSize - 1)
-                  copyMutableArray rightNodes 0 leftNodes (leftSize + 1) rightSize
+                  P.copyMutableArray rightNodes 0 leftNodes (leftSize + 1) rightSize
                   unsafeInsertPrimArray (rightSize - 1) (gtIx - leftSize - 1) propagated rightKeys
                   unsafeInsertArray rightSize (gtIx - leftSize) rightNode rightNodes
                   writeMutVar szRef leftSize
@@ -347,8 +348,8 @@ unsafeInsertArray :: (PrimMonad m)
   -> MutableArray (PrimState m) a -- ^ Array to modify
   -> m ()
 unsafeInsertArray sz i x marr = do
-  copyMutableArray marr (i + 1) marr i (sz - i)
-  writeArray marr i x
+  P.copyMutableArray marr (i + 1) marr i (sz - i)
+  P.writeArray marr i x
 
 -- Inserts a value at the designated index,
 -- shifting everything after it to the right.
@@ -407,7 +408,7 @@ debugMap (Context _) (BTree rootSzRef rootKeys rootContents) = do
               nextStrs <- go (level + 1) nextSz nextKeys nextContents
               return (nextStrs ++ [(level,show k)]) -- ++ " (Size: " ++ show nextSz ++ ")")])
           -- I think this should always end up being in bounds
-          BTree lastSzRef lastKeys lastContents <- readArray nodes sz
+          BTree lastSzRef lastKeys lastContents <- P.readArray nodes sz
           lastSz <- readMutVar lastSzRef
           lastStrs <- go (level + 1) lastSz lastKeys lastContents
           -- return (nextStrs ++ [(level,show k)])
@@ -427,7 +428,7 @@ pairForM sz marr1 marr2 f = go 0
   go ix = if ix < sz
     then do
       a <- readPrimArray marr1 ix
-      c <- readArray marr2 ix
+      c <- P.readArray marr2 ix
       b <- f a c
       bs <- go (ix + 1)
       return (b : bs)

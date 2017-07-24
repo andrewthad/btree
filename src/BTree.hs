@@ -18,7 +18,7 @@ module BTree
   ) where
 
 import Prelude hiding (lookup)
-import Data.Primitive hiding (fromList)
+import Data.Primitive (Prim)
 import Control.Monad.ST
 import Data.Primitive.MutVar
 
