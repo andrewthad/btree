@@ -8,14 +8,14 @@
 
 module BTree.Store
   ( BTree
-  , Regioned(..)
+  , Initialize(..)
+  , Deinitialize(..)
   , new
   , free
   , with
   , with_
   , lookup
   , insert
-  , delete
   , modifyWithM_
   , modifyWithM
   , foldrWithKey
@@ -37,21 +37,15 @@ data BTree k v = BTree
 
 data Node k v
 
-class Storable a => Regioned a where
+class Storable a => Initialize a where
   initialize :: Ptr a -> IO ()
   -- ^ Initialize the memory at a pointer. An implementation
   --   of this function may do nothing, or if the data contains
   --   more pointers, @initialize@ may allocate additional memory.
-  deinitialize :: Ptr a -> IO ()
   initializeElemOff :: Ptr a -> Int -> IO ()
   -- ^ Can be overridden for efficiency
   initializeElemOff ptr ix = do
     initialize (plusPtr ptr (ix * sizeOf (undefined :: a)) :: Ptr a)
-  deinitializeElemOff :: Ptr a -> Int -> IO ()
-  -- ^ Can be overridden for efficiency
-  deinitializeElemOff ptr ix =
-    deinitialize (plusPtr ptr (ix * sizeOf (undefined :: a)) :: Ptr a)
-  -- ^ Free any memory in the data structure pointed to.
   initializeElems :: Ptr a -> Int -> IO ()
   -- ^ Initialize a pointer representing an array with
   --   a given number of elements. This has a default implementation
@@ -64,6 +58,13 @@ class Storable a => Regioned a where
         go (i + 1)
       else return ()
 
+class Storable a => Deinitialize a where
+  deinitialize :: Ptr a -> IO ()
+  deinitializeElemOff :: Ptr a -> Int -> IO ()
+  -- ^ Can be overridden for efficiency
+  deinitializeElemOff ptr ix =
+    deinitialize (plusPtr ptr (ix * sizeOf (undefined :: a)) :: Ptr a)
+  -- ^ Free any memory in the data structure pointed to.
   deinitializeElems :: Ptr a -> Int -> IO ()
   -- ^ Free any memory pointed to by elements of the array.
   --   This has a default implementation
@@ -90,10 +91,12 @@ instance Storable (BTree k v) where
 -- this instance relies on Int and Ptr being the same
 -- size. this seems to be true for everything that
 -- GHC targets.
-instance (Storable k, Regioned v) => Regioned (BTree k v) where
+instance (Storable k, Storable v) => Initialize (BTree k v) where
   initialize ptr = do
     pokeElemOff (castPtr ptr :: Ptr Int) 0 (0 :: Int)
-    pokeElemOff (castPtr ptr :: Ptr (Ptr (Node k v))) 1 =<< newNode 0
+    pokeElemOff (castPtr ptr :: Ptr (Ptr (Node k v))) 1 =<< newNode 1
+
+instance (Storable k, Deinitialize v) => Deinitialize (BTree k v) where
   deinitialize ptr = do
     bt <- peek ptr
     free bt
@@ -101,53 +104,66 @@ instance (Storable k, Regioned v) => Regioned (BTree k v) where
 newtype Uninitialized a = Uninitialized a
   deriving (Storable)
 
-instance Storable a => Regioned (Uninitialized a) where
+instance Storable a => Initialize (Uninitialized a) where
   initialize _ = return ()
-  deinitialize _ = return ()
   initializeElemOff _ _ = return ()
-  deinitializeElemOff _ _ = return ()
   initializeElems _ _ = return ()
+
+instance Storable a => Deinitialize (Uninitialized a) where
+  deinitialize _ = return ()
+  deinitializeElemOff _ _ = return ()
   deinitializeElems _ _ = return ()
 
-instance Regioned Word8 where
+instance Initialize Word8 where
   initialize _ = return ()
-  deinitialize _ = return ()
   initializeElemOff _ _ = return ()
-  deinitializeElemOff _ _ = return ()
   initializeElems _ _ = return ()
+
+instance Deinitialize Word8 where
+  deinitialize _ = return ()
+  deinitializeElemOff _ _ = return ()
   deinitializeElems _ _ = return ()
 
-instance Regioned Word16 where
+instance Initialize Word16 where
   initialize _ = return ()
-  deinitialize _ = return ()
   initializeElemOff _ _ = return ()
-  deinitializeElemOff _ _ = return ()
   initializeElems _ _ = return ()
+
+instance Deinitialize Word16 where
+  deinitialize _ = return ()
+  deinitializeElemOff _ _ = return ()
   deinitializeElems _ _ = return ()
 
-instance Regioned Word where
+instance Initialize Word where
   initialize _ = return ()
-  deinitialize _ = return ()
   initializeElemOff _ _ = return ()
-  deinitializeElemOff _ _ = return ()
   initializeElems _ _ = return ()
+
+instance Deinitialize Word where
+  deinitialize _ = return ()
+  deinitializeElemOff _ _ = return ()
   deinitializeElems _ _ = return ()
 
-instance Regioned Int where
+instance Initialize Int where
   initialize _ = return ()
-  deinitialize _ = return ()
   initializeElemOff _ _ = return ()
-  deinitializeElemOff _ _ = return ()
   initializeElems _ _ = return ()
+
+instance Deinitialize Int where
+  deinitialize _ = return ()
+  deinitializeElemOff _ _ = return ()
   deinitializeElems _ _ = return ()
 
-instance Regioned Char where
+instance Initialize Char where
   initialize _ = return ()
-  deinitialize _ = return ()
   initializeElemOff _ _ = return ()
-  deinitializeElemOff _ _ = return ()
   initializeElems _ _ = return ()
+
+instance Deinitialize Char where
+  deinitialize _ = return ()
+  deinitializeElemOff _ _ = return ()
   deinitializeElems _ _ = return ()
+
 
 newtype Arr a = Arr { getArr :: Ptr a }
 data KeysValues k v = KeysValues !(Arr k) !(Arr v)
@@ -175,7 +191,7 @@ minimumDegree = 6
 
 -- | Release all memory allocated by the b-tree. Do not attempt
 --   to use the b-tree after calling this.
-free :: forall k v. (Storable k, Regioned v) => BTree k v -> IO ()
+free :: forall k v. (Storable k, Deinitialize v) => BTree k v -> IO ()
 free (BTree height root) = go height root
   where
   branchDegree :: Int
@@ -195,14 +211,14 @@ free (BTree height root) = go height root
       deinitializeElems (getArr values) sz
       FMA.free ptrNode
 
-with :: (Storable k, Regioned v) => (BTree k v -> IO (a, BTree k v)) -> IO a
+with :: (Storable k, Initialize v, Deinitialize v) => (BTree k v -> IO (a, BTree k v)) -> IO a
 with f = do
   initial <- new
   (a,final) <- f initial
   free final
   return a
 
-with_ :: (Storable k, Regioned v) => (BTree k v -> IO (BTree k v)) -> IO ()
+with_ :: (Storable k, Initialize v, Deinitialize v) => (BTree k v -> IO (BTree k v)) -> IO ()
 with_ f = do
   initial <- new
   final <- f initial
@@ -310,7 +326,7 @@ data Insert k v r
     -- is provided.
 
 {-# INLINE insert #-}
-insert :: (Ord k, Storable k, Regioned v)
+insert :: (Ord k, Storable k, Initialize v)
   => BTree k v
   -> k
   -> v
@@ -321,21 +337,21 @@ insert !m !k !v = do
     (\ptr ix -> pokeElemOff ptr ix v >> return ((),Keep))
   return node
 
-delete :: (Ord k, Storable k, Regioned v)
-  => BTree k v
-  -> k
-  -> IO (BTree k v)
-delete !m !k = do
-  !(!(),!node) <- modifyWithPtr m k
-    (Left ())
-    (\_ _ -> return ((),Delete))
-  return node
+-- delete :: (Ord k, Storable k, Regioned v)
+--   => BTree k v
+--   -> k
+--   -> IO (BTree k v)
+-- delete !m !k = do
+--   !(!(),!node) <- modifyWithPtr m k
+--     (Left ())
+--     (\_ _ -> return ((),Delete))
+--   return node
 
 data Decision = Keep | Delete
 
 -- data Position = Next | Prev
 
-modifyWithM_ :: forall k v. (Ord k, Storable k, Regioned v)
+modifyWithM_ :: forall k v. (Ord k, Storable k, Initialize v)
   => BTree k v 
   -> k
   -> (v -> IO v) -- ^ value modification, happens for newly inserted elements and for previously existing elements
@@ -346,7 +362,7 @@ modifyWithM_ bt k alter = do
     (\ptr ix -> peekElemOff ptr ix >>= alter >>= pokeElemOff ptr ix >>= \_ -> return ((),Keep))
   return bt'
 
-modifyWithM :: forall k v a. (Ord k, Storable k, Regioned v)
+modifyWithM :: forall k v a. (Ord k, Storable k, Initialize v)
   => BTree k v 
   -> k
   -> (v -> IO (a, v)) -- ^ value modification, happens for newly inserted elements and for previously existing elements
@@ -365,7 +381,7 @@ modifyWithM bt k alter = do
     )
   return (a,bt')
 
-modifyWithPtr :: forall k v r. (Ord k, Storable k, Regioned v)
+modifyWithPtr :: forall k v r. (Ord k, Storable k, Initialize v)
   => BTree k v 
   -> k
   -> (Either r (Ptr v -> Int -> IO r)) -- ^ modifications to newly inserted value
@@ -627,15 +643,15 @@ modifyWithPtr (BTree !height !root) !k !mpostInitializeElemOff alterElemOff = do
           !(r,dec) <- alterElemOff (getArr values) ix
           case dec of
             Keep -> return (Ok r)
-            Delete -> do
-              let newSize = sz - 1
-                  minimumChildSz = half childDegree
-              writeNodeSize ptrNode newSize
-              removeArr sz ix keys
-              removeArrDeinit sz ix values
-              if newSize < minimumChildSz
-                then return (TooSmall r)
-                else return (Ok r)
+            Delete -> fail "write the delete code for b tree" -- do
+              -- let newSize = sz - 1
+              --     minimumChildSz = half childDegree
+              -- writeNodeSize ptrNode newSize
+              -- removeArr sz ix keys
+              -- removeArrDeinit sz ix values
+              -- if newSize < minimumChildSz
+              --   then return (TooSmall r)
+              --   else return (Ok r)
 
 -- this is used when one of the arrays is too small. The
 -- caller of this function must ensure in advance that
@@ -691,15 +707,15 @@ insertArr !sz !i !x !arr = do
   copyArr arr (i + 1) arr i (sz - i)
   writeArr arr i x
 
-{-# INLINE removeArrDeinit #-}
-removeArrDeinit :: Regioned a
-  => Int -- ^ Size of the original array
-  -> Int -- ^ Index
-  -> Arr a -- ^ Array to modify
-  -> IO ()
-removeArrDeinit !sz !i !arr = do
-  deinitializeElemOff (getArr arr) i
-  copyArr arr i arr (i + 1) (sz - i - 1)
+-- {-# INLINE removeArrDeinit #-}
+-- removeArrDeinit :: Deinitialize a
+--   => Int -- ^ Size of the original array
+--   -> Int -- ^ Index
+--   -> Arr a -- ^ Array to modify
+--   -> IO ()
+-- removeArrDeinit !sz !i !arr = do
+--   deinitializeElemOff (getArr arr) i
+--   copyArr arr i arr (i + 1) (sz - i - 1)
 
 {-# INLINE removeArr #-}
 removeArr :: Storable a

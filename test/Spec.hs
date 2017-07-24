@@ -193,7 +193,7 @@ lookupAfterInsert degree xs' =
             else Left ("looked up " ++ show x ++ " but found wrong value " ++ show y)
         return (r1 >> r2)
 
-lookupAfterInsertUnmanaged :: (Show n, Ord n, BTS.Regioned n)
+lookupAfterInsertUnmanaged :: (Show n, Ord n, BTS.Initialize n, BTS.Deinitialize n)
   => Int -- ^ degree of b-tree
   -> [Positive n] -- ^ values to insert
   -> Either Reason Reason
@@ -265,20 +265,20 @@ orderingStorable xs =
    in result
 
 -- this does all insertions followed by all deletions
-deletionStorable :: KnownNat n
-  => [Padded n] -- ^ values to insert
-  -> Either Reason Reason
-deletionStorable xs = 
-  let expected = map (\x -> (x,x)) $ S.toAscList $ S.fromList xs
-      result = unsafePerformIO $ BTS.with $ \m0 -> do
-        m1 <- foldlM (\ !m !x -> BTS.insert m x x) m0 xs
-        m2 <- foldlM (\ !m !x -> BTS.delete m x) m1 (deterministicShuffle xs)
-        actual <- BTS.toAscList m2
-        let e = if actual == []
-              then Right "good"
-              else Left (notice "empty list" (show actual) "layout not available")
-        return (e,m2)
-   in result
+-- deletionStorable :: KnownNat n
+--   => [Padded n] -- ^ values to insert
+--   -> Either Reason Reason
+-- deletionStorable xs = 
+--   let expected = map (\x -> (x,x)) $ S.toAscList $ S.fromList xs
+--       result = unsafePerformIO $ BTS.with $ \m0 -> do
+--         m1 <- foldlM (\ !m !x -> BTS.insert m x x) m0 xs
+--         m2 <- foldlM (\ !m !x -> BTS.delete m x) m1 (deterministicShuffle xs)
+--         actual <- BTS.toAscList m2
+--         let e = if actual == []
+--               then Right "good"
+--               else Left (notice "empty list" (show actual) "layout not available")
+--         return (e,m2)
+--    in result
 
 
 -- let us begin the most dangerous game.
@@ -344,8 +344,10 @@ instance KnownNat n => Storable (Padded n) where
   peek ptr = fmap Padded (peek (castPtr ptr))
   poke ptr (Padded w) = poke (castPtr ptr) w
 
-instance KnownNat n => BTS.Regioned (Padded n) where
+instance KnownNat n => BTS.Initialize (Padded n) where
   initialize _ = return ()
+
+instance KnownNat n => BTS.Deinitialize (Padded n) where
   deinitialize _ = return ()
 
 instance Show (Padded n) where
