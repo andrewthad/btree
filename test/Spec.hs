@@ -29,7 +29,6 @@ import Data.Int
 import Data.Proxy
 import Data.Primitive.Types
 import Data.Foldable
-import Data.Primitive.Compact (withToken,getSizeOfCompact)
 import System.IO.Unsafe
 import Data.Hashable
 import Foreign.Storable
@@ -112,7 +111,7 @@ scProps :: TestTree
 scProps = testGroup "smallcheck"
   [ testGroup "unmanaged heap" (smallcheckTests orderingStorable)
   , testGroup "unmanaged heap nested" (smallcheckTests orderingNested)
-  , testGroup "unmanaged heap deletions" (smallcheckTests deletionStorable)
+  -- , testGroup "unmanaged heap deletions" (smallcheckTests deletionStorable)
   -- , testGroup "standard heap" (smallcheckTests ordering) 
   -- , testPropDepth 7 "standard heap lookup"
   --     (over (series :: Series IO [Positive Int]) (lookupAfterInsert 3))

@@ -1,6 +1,0 @@
-[submodule "compact-mutable"]
-	path = compact-mutable
-	url = https://github.com/andrewthad/compact-mutable.git
-[submodule "prim-array"]
-	path = prim-array
-	url = https://github.com/andrewthad/prim-array

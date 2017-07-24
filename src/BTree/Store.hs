@@ -332,7 +332,7 @@ delete !m !k = do
 
 data Decision = Keep | Delete
 
-data Position = Next | Prev
+-- data Position = Next | Prev
 
 modifyWithM_ :: forall k v. (Ord k, Storable k, Regioned v)
   => BTree k v 
@@ -477,46 +477,46 @@ modifyWithPtr (BTree !height !root) !k !mpostInitializeElemOff alterElemOff = do
             if newSz < minimumBranchSz
               then return (TooSmall r)
               else return (Ok r)
-          runNext :: Position -> Int -> Ptr (Node k v) -> Int -> IO (Insert k v r)
-          runNext pos keyIx neighborPtrNode neighborSz = do
-            childSz <- readNodeSize node
-            let KeysValues childKeys childValues = readNodeKeysValues childDegree node
-            let KeysValues neighborKeys neighborValues = readNodeKeysValues childDegree neighborPtrNode
-            let preservedPtr = case pos of
-                  Next -> node
-                  Prev -> neighborPtrNode
-            let destroyedPtr = case pos of
-                  Next -> neighborPtrNode
-                  Prev -> node
-            let destroyedPtrIx = case pos of
-                  Next -> neighborIx - 1
-                  Prev -> neighborIx
-            if childSz + nextSz < childDegree
-              then do
-                case pos of
-                  Next -> mergeIntoLeft childKeys childValues childSz neighborKeys neighborValues neighborSz
-                  Prev -> mergeIntoLeft neighborKeys neighborValues neighborSz childKeys childValues childSz
-                writeNodeSize preservedPtr (childSz + neighborSz)
-                FMA.free destroyedPtr
-                -- _ <- fail "after call free"
-                if sz < 2
-                  then return (TotallyEmpty preservedPtr r)
-                  else do
-                    -- putStrLn $ "size of nodes: " ++ show sz
-                    _ <- fail "merging arrays"
-                    removeArr sz 0 keys -- first key
-                    removeArr (sz + 1) 1 nodes -- right child of first key
-                    writeNodeSize ptrNode (sz - 1)
-                    continue
-              else do
-                -- putStrLn $ "child size: " ++ show childSz
-                -- putStrLn $ "next size: " ++ show nextSz
-                _ <- fail "balancing arrays"
-                (newChildSz,newNextSz) <- balanceArrays childKeys childValues childSz nextKeys nextValues nextSz
-                writeNodeSize nextPtrNode newNextSz
-                writeNodeSize node newChildSz
-                readArr nextKeys 0 >>= writeArr keys 0
-                continue
+          -- runNext :: Position -> Int -> Ptr (Node k v) -> Int -> IO (Insert k v r)
+          -- runNext _pos _keyIx _neighborPtrNode _neighborSz = fail "write runNext"
+            -- childSz <- readNodeSize node
+            -- let KeysValues childKeys childValues = readNodeKeysValues childDegree node
+            -- let KeysValues neighborKeys neighborValues = readNodeKeysValues childDegree neighborPtrNode
+            -- let preservedPtr = case pos of
+            --       Next -> node
+            --       Prev -> neighborPtrNode
+            -- let destroyedPtr = case pos of
+            --       Next -> neighborPtrNode
+            --       Prev -> node
+            -- let destroyedPtrIx = case pos of
+            --       Next -> neighborIx - 1
+            --       Prev -> neighborIx
+            -- if childSz + nextSz < childDegree
+            --   then do
+            --     case pos of
+            --       Next -> mergeIntoLeft childKeys childValues childSz neighborKeys neighborValues neighborSz
+            --       Prev -> mergeIntoLeft neighborKeys neighborValues neighborSz childKeys childValues childSz
+            --     writeNodeSize preservedPtr (childSz + neighborSz)
+            --     FMA.free destroyedPtr
+            --     -- _ <- fail "after call free"
+            --     if sz < 2
+            --       then return (TotallyEmpty preservedPtr r)
+            --       else do
+            --         -- putStrLn $ "size of nodes: " ++ show sz
+            --         _ <- fail "merging arrays"
+            --         removeArr sz 0 keys -- first key
+            --         removeArr (sz + 1) 1 nodes -- right child of first key
+            --         writeNodeSize ptrNode (sz - 1)
+            --         continue
+            --   else do
+            --     -- putStrLn $ "child size: " ++ show childSz
+            --     -- putStrLn $ "next size: " ++ show nextSz
+            --     _ <- fail "balancing arrays"
+            --     (newChildSz,newNextSz) <- balanceArrays childKeys childValues childSz nextKeys nextValues nextSz
+            --     writeNodeSize nextPtrNode newNextSz
+            --     writeNodeSize node newChildSz
+            --     readArr nextKeys 0 >>= writeArr keys 0
+            --     continue
         Split !rightNode !propagated !v -> if sz < branchDegree - 1
           then do
             insertArr sz gtIx propagated keys
