@@ -91,7 +91,7 @@ instance Storable (BTree k v) where
 -- this instance relies on Int and Ptr being the same
 -- size. this seems to be true for everything that
 -- GHC targets.
-instance (Storable k, Storable v) => Initialize (BTree k v) where
+instance Initialize (BTree k v) where
   initialize ptr = do
     pokeElemOff (castPtr ptr :: Ptr Int) 0 (0 :: Int)
     pokeElemOff (castPtr ptr :: Ptr (Ptr (Node k v))) 1 =<< newNode 1
@@ -224,8 +224,8 @@ with_ f = do
   final <- f initial
   free final
 
-newNode :: forall k v. (Storable k, Storable v)
-  => Int -- ^ initial size, if you pick something greater than 0,
+newNode :: 
+     Int -- ^ initial size, if you pick something greater than 0,
          --   you need to write to those indices after calling this.
   -> IO (Ptr (Node k v))
 newNode n = do
