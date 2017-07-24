@@ -31,8 +31,8 @@ import Data.Word
 import qualified Foreign.Marshal.Alloc as FMA
 
 data BTree k v = BTree 
-  !Int -- ^ height
-  !(Ptr (Node k v)) -- ^ root node
+  !Int -- height
+  !(Ptr (Node k v)) -- root node
 
 data Node k v
 
