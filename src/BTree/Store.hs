@@ -15,6 +15,7 @@ module BTree.Store
   , with_
   , lookup
   , insert
+  , delete
   , modifyWithM_
   , foldrWithKey
   , toAscList
@@ -159,14 +160,17 @@ new = do
   -- sooner.
   let childDegree = calcChildDegree (undefined :: Ptr (Node k v))
       branchDegree = calcBranchDegree (undefined :: Ptr (Node k v))
-  if childDegree < 3
-    then fail "Btree.new: child degree cannot be less than 3"
+  if childDegree < minimumDegree
+    then fail $ "Btree.new: child degree cannot be less than " ++ show minimumDegree
     else return ()
-  if branchDegree < 3
-    then fail "Btree.new: branch degree cannot be less than 3"
+  if branchDegree < minimumDegree
+    then fail $ "Btree.new: branch degree cannot be less than " ++ show minimumDegree
     else return ()
   ptr <- newNode 0
   return (BTree 0 ptr)
+
+minimumDegree :: Int
+minimumDegree = 6
 
 -- | Release all memory allocated by the b-tree. Do not attempt
 --   to use the b-tree after calling this.
@@ -300,6 +304,9 @@ data Insert k v r
     -- the key propagated to the parent,
     -- the inserted value
   | TooSmall !r
+  | TotallyEmpty !(Ptr (Node k v)) !r
+    -- The node has zero keys left. Its sole child
+    -- is provided.
 
 {-# INLINE insert #-}
 insert :: (Ord k, Storable k, Regioned v)
@@ -309,11 +316,23 @@ insert :: (Ord k, Storable k, Regioned v)
   -> IO (BTree k v)
 insert !m !k !v = do
   !(!(),!node) <- modifyWithPtr m k
-    (\ptr ix -> pokeElemOff ptr ix v)
-    (\ptr ix -> pokeElemOff ptr ix v)
+    (Right (\ptr ix -> pokeElemOff ptr ix v))
+    (\ptr ix -> pokeElemOff ptr ix v >> return ((),Keep))
+  return node
+
+delete :: (Ord k, Storable k, Regioned v)
+  => BTree k v
+  -> k
+  -> IO (BTree k v)
+delete !m !k = do
+  !(!(),!node) <- modifyWithPtr m k
+    (Left ())
+    (\_ _ -> return ((),Delete))
   return node
 
 data Decision = Keep | Delete
+
+data Position = Next | Prev
 
 modifyWithM_ :: forall k v. (Ord k, Storable k, Regioned v)
   => BTree k v 
@@ -322,20 +341,26 @@ modifyWithM_ :: forall k v. (Ord k, Storable k, Regioned v)
   -> IO (BTree k v)
 modifyWithM_ bt k alter = do
   (_, bt') <- modifyWithPtr bt k
-    (\ptr ix -> peekElemOff ptr ix >>= alter >>= pokeElemOff ptr ix)
-    (\ptr ix -> peekElemOff ptr ix >>= alter >>= pokeElemOff ptr ix)
+    (Right (\ptr ix -> peekElemOff ptr ix >>= alter >>= pokeElemOff ptr ix))
+    (\ptr ix -> peekElemOff ptr ix >>= alter >>= pokeElemOff ptr ix >>= \_ -> return ((),Keep))
   return bt'
 
 modifyWithPtr :: forall k v r. (Ord k, Storable k, Regioned v)
   => BTree k v 
   -> k
-  -> (Ptr v -> Int -> IO (r,Decision)) -- ^ modifications to newly inserted value after initialization
+  -> (Either r (Ptr v -> Int -> IO r)) -- ^ modifications to newly inserted value
   -> (Ptr v -> Int -> IO (r,Decision)) -- ^ modification to value if key is found
   -> IO (r, BTree k v)
-modifyWithPtr (BTree !height !root) !k !postInitializeElemOff alterElemOff = do
+modifyWithPtr (BTree !height !root) !k !mpostInitializeElemOff alterElemOff = do
   !ins <- go height root
   case ins of
-    Ok !v -> return (v, BTree height root)
+    Ok !r -> return (r, BTree height root)
+    TotallyEmpty child r -> do
+      FMA.free root
+      return (r, BTree (height - 1) child)
+    -- if the root is too small, we do not care. The root
+    -- can have any number of keys greater than 1.
+    TooSmall !r -> return (r, BTree 0 root)
     Split !rightNode !newRootKey !v -> do
       newRoot <- newNode 1
       let KeysNodes keys nodes = readNodeKeysNodes branchDegree newRoot
@@ -345,6 +370,8 @@ modifyWithPtr (BTree !height !root) !k !postInitializeElemOff alterElemOff = do
       writeArr nodes 1 rightNode
       return (v,BTree (height + 1) newRoot)
   where
+  childDegree :: Int
+  !childDegree = calcChildDegree root
   branchDegree :: Int
   !branchDegree = calcBranchDegree root
   go :: Int -> Ptr (Node k v) -> IO (Insert k v r)
@@ -356,7 +383,140 @@ modifyWithPtr (BTree !height !root) !k !postInitializeElemOff alterElemOff = do
       !node <- readArr nodes gtIx
       !ins <- go (n - 1) node
       case ins of
-        Ok !v -> return (Ok v)
+        Ok !r -> return (Ok r)
+        TotallyEmpty _ _ -> fail "TotallyEmpty: handle this in go"
+        TooSmall !r -> do
+          if n == 1
+            then 
+              if | gtIx >= sz -> do
+                     if (gtIx /= sz) then fail "bad logic found: gtIx must be sz" else return ()
+                     childSz <- readNodeSize node
+                     let KeysValues childKeys childValues = readNodeKeysValues childDegree node
+                     prevPtrNode <- readArr nodes (gtIx - 1)
+                     prevSz <- readNodeSize prevPtrNode
+                     let KeysValues prevKeys prevValues = readNodeKeysValues childDegree prevPtrNode
+                     if childSz + prevSz < childDegree
+                       then do
+                         mergeIntoLeft prevKeys prevValues prevSz childKeys childValues childSz
+                         writeNodeSize prevPtrNode (childSz + prevSz)
+                         FMA.free node
+                         if sz < 2
+                           then do
+                             -- whatever code handles this one level up needs
+                             -- to remember to call free on the now-obsolete
+                             -- branch node. 
+                             return (TotallyEmpty prevPtrNode r)
+                           else do
+                             -- putStrLn $ "size of nodes: " ++ show sz
+                             _ <- fail "merging arrays"
+                             removeArr sz (sz - 1) keys -- first key
+                             removeArr (sz + 1) sz nodes -- right child of first key
+                             writeNodeSize ptrNode (sz - 1)
+                             continue
+                       else do
+                         -- putStrLn $ "child size: " ++ show childSz
+                         -- putStrLn $ "next size: " ++ show nextSz
+                         (newPrevSz,newChildSz) <- balanceArrays prevKeys prevValues prevSz childKeys childValues childSz
+                         writeNodeSize prevPtrNode newPrevSz
+                         writeNodeSize node newChildSz
+                         readArr childKeys 0 >>= writeArr keys (sz - 1)
+                         continue
+                 | gtIx > 0 -> fail "write me now"
+                     -- childSz <- readNodeSize node
+                     -- let KeysValues childKeys childValues = readNodeKeysValues childDegree node
+                     -- nextPtrNode <- readArr nodes (gtIx + 1)
+                     -- nextSz <- readNodeSize nextPtrNode
+                     -- let KeysValues nextKeys nextValues = readNodeKeysValues childDegree nextPtrNode
+                     -- prevPtrNode <- readArr nodes (gtIx - 1)
+                     -- prevSz <- readNodeSize prevPtrNode
+                     -- let KeysValues prevKeys prevValues = readNodeKeysValues childDegree prevPtrNode
+                     -- if nextSz > prevSz
+                     --   then runNext 
+                     --   else runPrev
+                 | otherwise -> do -- gtIx must be 0
+                     if (gtIx /= 0) then fail "bad logic found" else return ()
+                     childSz <- readNodeSize node
+                     let KeysValues childKeys childValues = readNodeKeysValues childDegree node
+                     nextPtrNode <- readArr nodes 1
+                     nextSz <- readNodeSize nextPtrNode
+                     let KeysValues nextKeys nextValues = readNodeKeysValues childDegree nextPtrNode
+                     if childSz + nextSz < childDegree
+                       then do
+                         mergeIntoLeft childKeys childValues childSz nextKeys nextValues nextSz
+                         writeNodeSize node (childSz + nextSz)
+                         FMA.free nextPtrNode
+                         -- _ <- fail "after call free"
+                         if sz < 2
+                           then do
+                             -- whatever code handles this one level up needs
+                             -- to remember to call free on the now-obsolete
+                             -- branch node. 
+                             return (TotallyEmpty node r)
+                           else do
+                             -- putStrLn $ "size of nodes: " ++ show sz
+                             _ <- fail "merging arrays"
+                             removeArr sz 0 keys -- first key
+                             removeArr (sz + 1) 1 nodes -- right child of first key
+                             writeNodeSize ptrNode (sz - 1)
+                             continue
+                       else do
+                         -- putStrLn $ "child size: " ++ show childSz
+                         -- putStrLn $ "next size: " ++ show nextSz
+                         _ <- fail "balancing arrays"
+                         (newChildSz,newNextSz) <- balanceArrays childKeys childValues childSz nextKeys nextValues nextSz
+                         writeNodeSize nextPtrNode newNextSz
+                         writeNodeSize node newChildSz
+                         readArr nextKeys 0 >>= writeArr keys 0
+                         continue
+            else fail "write code for branch handling a branch merge"
+          where
+          continue :: IO (Insert k v r)
+          continue = do
+            newSz <- readNodeSize ptrNode
+            let minimumBranchSz = half branchDegree - 1
+            if newSz < minimumBranchSz
+              then return (TooSmall r)
+              else return (Ok r)
+          runNext :: Position -> Int -> Ptr (Node k v) -> Int -> IO (Insert k v r)
+          runNext pos keyIx neighborPtrNode neighborSz = do
+            childSz <- readNodeSize node
+            let KeysValues childKeys childValues = readNodeKeysValues childDegree node
+            let KeysValues neighborKeys neighborValues = readNodeKeysValues childDegree neighborPtrNode
+            let preservedPtr = case pos of
+                  Next -> node
+                  Prev -> neighborPtrNode
+            let destroyedPtr = case pos of
+                  Next -> neighborPtrNode
+                  Prev -> node
+            let destroyedPtrIx = case pos of
+                  Next -> neighborIx - 1
+                  Prev -> neighborIx
+            if childSz + nextSz < childDegree
+              then do
+                case pos of
+                  Next -> mergeIntoLeft childKeys childValues childSz neighborKeys neighborValues neighborSz
+                  Prev -> mergeIntoLeft neighborKeys neighborValues neighborSz childKeys childValues childSz
+                writeNodeSize preservedPtr (childSz + neighborSz)
+                FMA.free destroyedPtr
+                -- _ <- fail "after call free"
+                if sz < 2
+                  then return (TotallyEmpty preservedPtr r)
+                  else do
+                    -- putStrLn $ "size of nodes: " ++ show sz
+                    _ <- fail "merging arrays"
+                    removeArr sz 0 keys -- first key
+                    removeArr (sz + 1) 1 nodes -- right child of first key
+                    writeNodeSize ptrNode (sz - 1)
+                    continue
+              else do
+                -- putStrLn $ "child size: " ++ show childSz
+                -- putStrLn $ "next size: " ++ show nextSz
+                _ <- fail "balancing arrays"
+                (newChildSz,newNextSz) <- balanceArrays childKeys childValues childSz nextKeys nextValues nextSz
+                writeNodeSize nextPtrNode newNextSz
+                writeNodeSize node newChildSz
+                readArr nextKeys 0 >>= writeArr keys 0
+                continue
         Split !rightNode !propagated !v -> if sz < branchDegree - 1
           then do
             insertArr sz gtIx propagated keys
@@ -392,70 +552,102 @@ modifyWithPtr (BTree !height !root) !k !postInitializeElemOff alterElemOff = do
             return (Split newNodePtr middleKey v)
     else do
       sz <- readNodeSize ptrNode
-      let childDegree = calcChildDegree root
-          KeysValues keys values = readNodeKeysValues childDegree ptrNode
+      let !(KeysValues !keys !values) = readNodeKeysValues childDegree ptrNode
       !ix <- findIndex keys k sz
       if ix < 0
-        then do
-          let !gtIx = decodeGtIndex ix
-          if sz < childDegree - 1
-            then do
-              -- We have enough space
-              insertArr sz gtIx k keys
-              (r,dec) <- insertInitArr sz gtIx values $ \thePtr theIx -> do
-                initializeElemOff thePtr theIx
-                postInitializeElemOff thePtr theIx
-              case dec of
-                Keep -> writeNodeSize ptrNode (sz + 1)
-                Delete -> do
-                  -- honestly, an end user wanting to immidiately
-                  -- delete a value after creating it is insane,
-                  -- but we support it nevertheless.
-                  removeArr (sz + 1) gtIx keys
-                  removeArrDeinit (sz + 1) gtIx values
-              return (Ok r)
-            else do
-              -- We do not have enough space. The node must be split.
-              let !leftSize = half sz
-                  !rightSize = sz - leftSize
-                  !leftKeys = keys
-                  !leftValues = values
-              let (newLeftSz,actualRightSz) = if gtIx < leftSize
-                    then (leftSize + 1, rightSize)
-                    else (leftSize,rightSize + 1)
-              newNodePtr <- newNode actualRightSz
-              writeNodeSize ptrNode newLeftSz
-              let KeysValues rightKeys rightValues = readNodeKeysValues childDegree newNodePtr
-              r <- if gtIx < leftSize
-                then do
-                  copyArr rightKeys 0 leftKeys leftSize rightSize
-                  copyArr rightValues 0 leftValues leftSize rightSize
-                  insertArr leftSize gtIx k leftKeys
-                  insertInitArr leftSize gtIx leftValues $ \thePtr theIx -> do
-                    initializeElemOff thePtr theIx
-                    postInitializeElemOff thePtr theIx
-                else do
-                  -- Currently, we're copying from left to right and
-                  -- then doing another copy from right to right. We
-                  -- might be able to do better. We could do the same number
-                  -- of memcpys but copy fewer total elements and not
-                  -- have the slowdown caused by overlap.
-                  copyArr rightKeys 0 leftKeys leftSize rightSize
-                  copyArr rightValues 0 leftValues leftSize rightSize
-                  insertArr rightSize (gtIx - leftSize) k rightKeys
-                  insertInitArr rightSize (gtIx - leftSize) rightValues $ \thePtr theIx -> do
-                    initializeElemOff thePtr theIx
-                    postInitializeElemOff thePtr theIx
-              !propagated <- readArr rightKeys 0
-              return (Split newNodePtr propagated r)
+        then case mpostInitializeElemOff of
+          Left r -> return (Ok r)
+          Right postInitializeElemOff -> do
+            let !gtIx = decodeGtIndex ix
+            if sz < childDegree - 1
+              then do
+                -- We have enough space
+                insertArr sz gtIx k keys
+                r <- insertInitArr sz gtIx values $ \thePtr theIx -> do
+                  initializeElemOff thePtr theIx
+                  postInitializeElemOff thePtr theIx
+                writeNodeSize ptrNode (sz + 1)
+                return (Ok r)
+              else do
+                -- We do not have enough space. The node must be split.
+                let !leftSize = half sz
+                    !rightSize = sz - leftSize
+                    !leftKeys = keys
+                    !leftValues = values
+                let (newLeftSz,actualRightSz) = if gtIx < leftSize
+                      then (leftSize + 1, rightSize)
+                      else (leftSize,rightSize + 1)
+                newNodePtr <- newNode actualRightSz
+                writeNodeSize ptrNode newLeftSz
+                let KeysValues rightKeys rightValues = readNodeKeysValues childDegree newNodePtr
+                r <- if gtIx < leftSize
+                  then do
+                    copyArr rightKeys 0 leftKeys leftSize rightSize
+                    copyArr rightValues 0 leftValues leftSize rightSize
+                    insertArr leftSize gtIx k leftKeys
+                    insertInitArr leftSize gtIx leftValues $ \thePtr theIx -> do
+                      initializeElemOff thePtr theIx
+                      postInitializeElemOff thePtr theIx
+                  else do
+                    -- Currently, we're copying from left to right and
+                    -- then doing another copy from right to right. We
+                    -- might be able to do better. We could do the same number
+                    -- of memcpys but copy fewer total elements and not
+                    -- have the slowdown caused by overlap.
+                    copyArr rightKeys 0 leftKeys leftSize rightSize
+                    copyArr rightValues 0 leftValues leftSize rightSize
+                    insertArr rightSize (gtIx - leftSize) k rightKeys
+                    insertInitArr rightSize (gtIx - leftSize) rightValues $ \thePtr theIx -> do
+                      initializeElemOff thePtr theIx
+                      postInitializeElemOff thePtr theIx
+                !propagated <- readArr rightKeys 0
+                return (Split newNodePtr propagated r)
         else do
           -- The key was already present in this leaf node
           !(r,dec) <- alterElemOff (getArr values) ix
           case dec of
             Keep -> return (Ok r)
             Delete -> do
+              let newSize = sz - 1
+                  minimumChildSz = half childDegree
+              writeNodeSize ptrNode newSize
               removeArr sz ix keys
               removeArrDeinit sz ix values
+              if newSize < minimumChildSz
+                then return (TooSmall r)
+                else return (Ok r)
+
+-- this is used when one of the arrays is too small. The
+-- caller of this function must ensure in advance that
+-- the arrays will end up being appropriately sized
+-- after the balancing.
+balanceArrays :: (Storable k, Storable v) => Arr k -> Arr v -> Int -> Arr k -> Arr v -> Int -> IO (Int,Int)
+balanceArrays arrA valA szA arrB valB szB = do
+  let newSzA = half (szA + szB)
+      newSzB = szA + szB - newSzA
+      deltaA = newSzA - szA
+      deltaB = negate deltaA
+  if deltaA > 0 
+    then do
+      copyArr arrA szA arrB 0 deltaA
+      copyArr arrB 0 arrB deltaA (szB - deltaA)
+      copyArr valA szA valB 0 deltaA
+      copyArr valB 0 valB deltaA (szB - deltaA)
+    else do
+      copyArr arrB deltaB arrB 0 szB
+      copyArr arrB 0 arrA (szA - deltaB) deltaB
+      copyArr valB deltaB valB 0 szB
+      copyArr valB 0 valA (szA - deltaB) deltaB
+  return (newSzA,newSzB)
+
+-- After this operation, all of the values are in the first
+-- provided array. The second one should be considered unusable
+-- and it should be freed from memory soon.
+mergeIntoLeft :: (Storable k, Storable v)
+  => Arr k -> Arr v -> Int -> Arr k -> Arr v -> Int -> IO ()
+mergeIntoLeft arrA valA szA arrB valB szB = do
+  copyArr arrA szA arrB 0 szB
+  copyArr valA szA valB 0 szB
 
 copyArr :: forall a. Storable a
   => Arr a -- ^ dest

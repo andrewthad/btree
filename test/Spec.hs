@@ -35,6 +35,7 @@ import Data.Hashable
 import Foreign.Storable
 import GHC.TypeLits
 import Foreign.Ptr
+import Control.Monad.Random.Strict
 
 import qualified Data.List as L
 import qualified Data.List.NonEmpty as NE
@@ -83,24 +84,24 @@ smallcheckTests ::
      (forall n. KnownNat n => [Padded n] -> Either Reason Reason)
   -> [TestTree]
 smallcheckTests f = 
-  [ testPropDepth 3 "small maps with 512 bit keys and values, all permutations, no splitting"
-      (over (series :: Series IO [Padded 512]) f)
+  [ testPropDepth 3 "small maps with 256 bit keys and values, all permutations, no splitting"
+      (over (series :: Series IO [Padded 256]) f)
   , testPropDepth 4 "small maps of degree 3, all permutations, one split"
-      (over (series :: Series IO [Padded 512]) f)
+      (over (series :: Series IO [Padded 256]) f)
   , testPropDepth 7 "small maps of degree 3, all permutations"
       (over (series :: Series IO [Padded 256]) f)
   , testPropDepth 7 "small maps of degree 4, all permutations"
       (over (series :: Series IO [Padded 256]) f)
   , testPropDepth 10 "medium maps of degree 3, few permutations"
-      (over (doubletonSeriesA (Proxy :: Proxy 512)) f)
+      (over (doubletonSeriesA (Proxy :: Proxy 256)) f)
   , testPropDepth 10 "medium maps of degree 4, few permutations"
       (over (doubletonSeriesA (Proxy :: Proxy 256)) f)
   , testPropDepth 10 "medium maps of degree 3, repeat keys likely, few permutations"
-      (over (doubletonSeriesB (Proxy :: Proxy 512)) f)
+      (over (doubletonSeriesB (Proxy :: Proxy 256)) f)
   , testPropDepth 10 "medium maps of degree 4, repeat keys likely, few permutations"
       (over (doubletonSeriesB (Proxy :: Proxy 256)) f)
   , testPropDepth 150 "large maps of degree 3, repeat keys certain, one permutation"
-      (over (singletonSeriesB (Proxy :: Proxy 512)) f)
+      (over (singletonSeriesB (Proxy :: Proxy 256)) f)
   , testPropDepth 150 "large maps of degree 6, one permutation"
       (over (singletonSeriesA (Proxy :: Proxy 128)) f)
   , testPropDepth 150 "large maps of degree 7, repeat keys certain, one permutation"
@@ -111,6 +112,7 @@ scProps :: TestTree
 scProps = testGroup "smallcheck"
   [ testGroup "unmanaged heap" (smallcheckTests orderingStorable)
   , testGroup "unmanaged heap nested" (smallcheckTests orderingNested)
+  , testGroup "unmanaged heap deletions" (smallcheckTests deletionStorable)
   -- , testGroup "standard heap" (smallcheckTests ordering) 
   -- , testPropDepth 7 "standard heap lookup"
   --     (over (series :: Series IO [Positive Int]) (lookupAfterInsert 3))
@@ -263,6 +265,23 @@ orderingStorable xs =
         return (e,m1)
    in result
 
+-- this does all insertions followed by all deletions
+deletionStorable :: KnownNat n
+  => [Padded n] -- ^ values to insert
+  -> Either Reason Reason
+deletionStorable xs = 
+  let expected = map (\x -> (x,x)) $ S.toAscList $ S.fromList xs
+      result = unsafePerformIO $ BTS.with $ \m0 -> do
+        m1 <- foldlM (\ !m !x -> BTS.insert m x x) m0 xs
+        m2 <- foldlM (\ !m !x -> BTS.delete m x) m1 (deterministicShuffle xs)
+        actual <- BTS.toAscList m2
+        let e = if actual == []
+              then Right "good"
+              else Left (notice "empty list" (show actual) "layout not available")
+        return (e,m2)
+   in result
+
+
 -- let us begin the most dangerous game.
 orderingNested :: KnownNat n
   => [Padded n] -- ^ values to insert
@@ -338,4 +357,14 @@ instance Monad m => Serial m (Padded n) where
 
 intToWord :: Int -> Word
 intToWord = fromIntegral
+
+deterministicShuffle :: Hashable a => [a] -> [a]
+deterministicShuffle xs = evalRand (shuffle xs) (mkStdGen (hash xs))
+
+shuffle :: [a] -> Rand StdGen [a]
+shuffle [] = return []
+shuffle xs = do
+  randomPosition <- getRandomR (0, length xs - 1)
+  let (left, (a:right)) = splitAt randomPosition xs
+  fmap (a:) (shuffle (left ++ right))
 

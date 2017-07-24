@@ -22,7 +22,7 @@ library
     BTree.Array
     BTree.Compact
     BTree.Contractible
-    BTree.ContractibleForall
+    -- BTree.ContractibleForall
     BTree.Store
   build-depends:
       base >= 4.10 && < 4.11
@@ -49,6 +49,7 @@ test-suite test
     , primitive
     , compact-mutable
     , hashable
+    , MonadRandom
   -- ghc-options: -threaded -rtsopts -with-rtsopts=-N
   default-language: Haskell2010
 
