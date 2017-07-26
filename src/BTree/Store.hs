@@ -858,7 +858,7 @@ half :: Int -> Int
 half x = unsafeShiftR x 1
 
 -- | This is provided for convenience but is not something
---   typically useful in producetion code.
+--   typically useful in production code.
 toAscList :: forall k v. (Ord k, Storable k, Storable v)
   => BTree k v
   -> IO [(k,v)]

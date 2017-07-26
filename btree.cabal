@@ -19,6 +19,7 @@ library
     BTree
     BTree.Store
     BTree.Linear
+    ArrayList
   build-depends:
       base >= 4.9 && < 4.11
     , ghc-prim >= 0.5 && < 0.6

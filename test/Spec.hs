@@ -35,12 +35,14 @@ import Foreign.Storable
 import GHC.TypeLits
 import Foreign.Ptr
 import Control.Monad.Random.Strict
+import Data.Bifunctor
 
 import qualified Data.List as L
 import qualified Data.List.NonEmpty as NE
 import qualified BTree as B
 import qualified BTree.Linear as BTL
 import qualified BTree.Store as BTS
+import qualified ArrayList as AL
 import qualified Data.Set as S
 import qualified Data.Primitive.PrimArray as P
 
@@ -107,21 +109,44 @@ smallcheckTests f =
       (over (singletonSeriesB (Proxy :: Proxy 128)) f)
   ]
 
+arraylistTests :: [TestTree]
+arraylistTests =
+  [ testPropDepth 10 "arraylist inserts followed by dump (short)" (over word16Series arrayListInsertions)
+  , testPropDepth 150 "arraylist inserts followed by dump (long)" (over word32Series arrayListInsertions)
+  , testPropDepth 150 "arraylist inserts followed by repeated pop (long)" (over word32Series pushPop)
+  -- , testPropDepth 150 "arraylist push, pop, twice (long)" (over word32Series pushPopTwice)
+  ]
+
 scProps :: TestTree
 scProps = testGroup "smallcheck"
   [ testGroup "unmanaged heap" (smallcheckTests orderingStorable)
   , testGroup "unmanaged heap nested" (smallcheckTests orderingNested)
   -- , testGroup "unmanaged heap deletions" (smallcheckTests deletionStorable)
-  -- , testGroup "standard heap" (smallcheckTests ordering) 
-  -- , testPropDepth 7 "standard heap lookup"
-  --     (over (series :: Series IO [Positive Int]) (lookupAfterInsert 3))
-  -- , testPropDepth 500 "standard heap bigger lookup"
-  --     (over singletonSeriesA (lookupAfterInsert 3))
-  -- , testPropDepth 7 "compact heap lookup"
-  --     (over (series :: Series IO [Positive Int]) (lookupAfterInsertCompact 3))
-  -- , testPropDepth 500 "compact heap bigger lookup"
-  --     (over singletonSeriesA (lookupAfterInsertCompact 10))
+  , testGroup "arraylist" arraylistTests
   ]
+
+arrayListInsertions :: (Eq a, Show a, Prim a, Storable a) => [a] -> Either String String
+arrayListInsertions xs = unsafePerformIO $ AL.with $ \a0 -> do
+  a1 <- foldlM AL.pushR a0 xs
+  (a2,ys) <- AL.dumpList a1
+  return $ (,) a2 $ if xs == ys
+    then Right "good"
+    else Left ("expected " ++ show xs ++ " but got " ++ show ys)
+
+pushPop :: forall a. (Eq a, Show a, Prim a, Storable a) => [a] -> Either String String
+pushPop xs = unsafePerformIO $ AL.with $ \a0 -> do
+  a1 <- foldlM AL.pushR a0 xs
+  let go :: AL.ArrayList a -> IO (AL.ArrayList a, [a])
+      go al = do
+        (al',m) <- AL.popL al
+        case m of
+          Nothing -> return (al',[])
+          Just a -> fmap (second (a:)) (go al')
+  (a2,ys) <- go a1
+  return $ (,) a2 $ if xs == ys
+    then Right "good"
+    else Left $ "expected " ++ show xs ++ " but got " ++ show ys
+
 
 unitTests :: TestTree
 unitTests = testGroup "Unit tests"
@@ -334,6 +359,12 @@ singletonSeriesA _ = (fmap.fmap) Padded (scanSeries (\n -> [n + 26399]) 0)
 
 singletonSeriesB :: Proxy n -> Series m [Padded n]
 singletonSeriesB _ = (fmap.fmap) Padded (scanSeries (\n -> [n + 73]) 0)
+
+word16Series :: Series m [Word16]
+word16Series = (scanSeries (\n -> [n + 89, n + 71]) 0)
+
+word32Series :: Series m [Word32]
+word32Series = (scanSeries (\n -> [n + 73]) 0)
 
 newtype Padded (n :: Nat) = Padded Word
   deriving (Eq,Ord,Bounded,Hashable,Integral,Real,Num,Enum)
