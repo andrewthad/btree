@@ -106,7 +106,7 @@ popL xs@(ArrayList start len bufLen ptr)
       newArrList <- minimizeMemory (ArrayList (start + 1) (len - 1) bufLen ptr)
       return (newArrList, Just a)
 
-dropWhileL :: forall a. Storable a => ArrayList a -> (a -> Bool) -> IO (ArrayList a)
+dropWhileL :: forall a. Storable a => ArrayList a -> (a -> Bool) -> IO (ArrayList a,Int)
 dropWhileL (ArrayList start len bufLen ptr) p = do
   let go :: Int -> IO Int
       go !i = if i < len
@@ -117,8 +117,8 @@ dropWhileL (ArrayList start len bufLen ptr) p = do
             else return i
         else return i
   dropped <- go 0
-  let newArrList = ArrayList (start + dropped) (len - dropped) bufLen ptr
-  minimizeMemory newArrList
+  newArrList <- minimizeMemory $ ArrayList (start + dropped) (len - dropped) bufLen ptr
+  return (newArrList,dropped)
 
 dropL :: forall a. Storable a => ArrayList a -> Int -> IO (ArrayList a)
 dropL (ArrayList start len bufLen ptr) n = do
