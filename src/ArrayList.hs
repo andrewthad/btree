@@ -41,6 +41,23 @@ data ArrayList a = ArrayList
   {-# UNPACK #-} !Int -- buffer length (in elements)
   {-# UNPACK #-} !(Ptr a) -- all the data
 
+instance Storable (ArrayList a) where
+  sizeOf _ = wordSz * 4
+  alignment _ = wordSz
+  peek ptr = ArrayList
+    <$> peek (castPtr ptr)
+    <*> peek (plusPtr ptr wordSz)
+    <*> peek (plusPtr ptr (wordSz + wordSz))
+    <*> peek (plusPtr ptr (wordSz + wordSz + wordSz))
+  poke ptr (ArrayList a b c d) = do
+    poke (castPtr ptr) a
+    poke (plusPtr ptr wordSz) b
+    poke (plusPtr ptr (wordSz + wordSz)) c
+    poke (plusPtr ptr (wordSz + wordSz + wordSz)) d
+
+wordSz :: Int
+wordSz = sizeOf (undefined :: Int)
+  
 initialSize :: Int
 initialSize = 4
 
