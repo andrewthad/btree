@@ -14,7 +14,7 @@ module ArrayList
   , pushR
   , popL
   , dropWhileL
-  , dropWhileML
+  , dropWhileScanL
   , dropL
   , dump
   , dumpList
@@ -130,18 +130,18 @@ dropWhileL (ArrayList start len bufLen ptr) p = do
   newArrList <- minimizeMemory $ ArrayList (start + dropped) (len - dropped) bufLen ptr
   return (newArrList,dropped)
 
-dropWhileML :: forall a. Storable a => ArrayList a -> (a -> IO Bool) -> IO (ArrayList a,Int)
-dropWhileML (ArrayList start len bufLen ptr) p = do
-  let go :: Int -> IO Int
-      go !i = if i < len
+dropWhileScanL :: forall a b. Storable a => ArrayList a -> b -> (b -> a -> IO (Maybe b)) -> IO (ArrayList a,Int)
+dropWhileScanL (ArrayList start len bufLen ptr) b0 p = do
+  let go :: Int -> b -> IO Int
+      go !i !b = if i < len
         then do
           a <- peek (advancePtr ptr (start + i))
-          b <- p a
-          if b
-            then go (i + 1)
-            else return i
+          m <- p b a
+          case m of
+            Just b' -> go (i + 1) b'
+            Nothing -> return i
         else return i
-  dropped <- go 0
+  dropped <- go 0 b0
   newArrList <- minimizeMemory $ ArrayList (start + dropped) (len - dropped) bufLen ptr
   return (newArrList,dropped)
 
