@@ -114,6 +114,7 @@ arraylistTests =
   [ testPropDepth 10 "arraylist inserts followed by dump (short)" (over word16Series arrayListInsertions)
   , testPropDepth 150 "arraylist inserts followed by dump (long)" (over word32Series arrayListInsertions)
   , testPropDepth 150 "arraylist inserts followed by repeated pop (long)" (over word32Series pushPop)
+  , testPropDepth 50 "arraylist dropWhile" (over word32Series arrayListDropWhile)
   -- , testPropDepth 150 "arraylist push, pop, twice (long)" (over word32Series pushPopTwice)
   ]
 
@@ -146,6 +147,21 @@ pushPop xs = unsafePerformIO $ AL.with $ \a0 -> do
   return $ (,) a2 $ if xs == ys
     then Right "good"
     else Left $ "expected " ++ show xs ++ " but got " ++ show ys
+
+arrayListDropWhile :: forall a. (Hashable a, Eq a, Show a, Prim a, Storable a) => [a] -> Either String String
+arrayListDropWhile xs = unsafePerformIO $ AL.with $ \a0 ->
+  case deterministicShuffle xs of
+    [] -> return (a0, Right "good")
+    x : _ -> do
+     a1 <- foldlM AL.pushR a0 xs
+     (a2,_) <- AL.dropWhileL a1 (/= x)
+     (a3,ys) <- AL.dumpList a2
+     let expected = L.dropWhile (/= x) xs
+     return $ (,) a3 $ if expected == ys
+       then Right "good"
+       else Left ("expected " ++ show expected ++ " but got " ++ show ys ++ " using pivot of " ++ show x)
+  
+  
 
 
 unitTests :: TestTree

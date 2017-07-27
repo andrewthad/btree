@@ -18,6 +18,7 @@ module ArrayList
   , dump
   , dumpList
   , clear
+  , showDebug
   ) where
 
 import Foreign.Ptr
@@ -170,6 +171,14 @@ dump :: forall a. (Prim a, Storable a) => ArrayList a -> MutablePrimArray RealWo
 dump xs@(ArrayList start len _ ptr) marr ix = do
   copyPtrToPrimArray (plusPtr ptr (start * PM.sizeOf (undefined :: a))) marr ix len
   clear xs
+
+-- | Does not affect the contents of the ArrayList
+showDebug :: forall a. (Prim a, Storable a, Show a) => ArrayList a -> IO String
+showDebug (ArrayList start len _ ptr) = do
+  marr <- newPrimArray len
+  copyPtrToPrimArray (plusPtr ptr (start * PM.sizeOf (undefined :: a))) marr 0 len
+  arr <- unsafeFreezePrimArray marr
+  return (show (primArrayToList len arr :: [a]))
 
 copyPtrToPrimArray :: forall a. Prim a
   => Ptr a -> MutablePrimArray RealWorld a -> Int -> Int -> IO ()
