@@ -145,9 +145,9 @@ instance Deinitialize Word where
   deinitializeElems _ _ = return ()
 
 instance Initialize Int where
-  initialize _ = return ()
-  initializeElemOff _ _ = return ()
-  initializeElems _ _ = return ()
+  initialize ptr = poke ptr (0 :: Int)
+  -- initializeElemOff _ _ = return ()
+  -- initializeElems _ _ = return ()
 
 instance Deinitialize Int where
   deinitialize _ = return ()
