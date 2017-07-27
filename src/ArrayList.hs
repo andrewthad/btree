@@ -130,20 +130,20 @@ dropWhileL (ArrayList start len bufLen ptr) p = do
   newArrList <- minimizeMemory $ ArrayList (start + dropped) (len - dropped) bufLen ptr
   return (newArrList,dropped)
 
-dropWhileScanL :: forall a b. Storable a => ArrayList a -> b -> (b -> a -> IO (Maybe b)) -> IO (ArrayList a,Int)
+dropWhileScanL :: forall a b. Storable a => ArrayList a -> b -> (b -> a -> IO (Bool,b)) -> IO (ArrayList a,Int,b)
 dropWhileScanL (ArrayList start len bufLen ptr) b0 p = do
-  let go :: Int -> b -> IO Int
+  let go :: Int -> b -> IO (Int,b)
       go !i !b = if i < len
         then do
           a <- peek (advancePtr ptr (start + i))
-          m <- p b a
-          case m of
-            Just b' -> go (i + 1) b'
-            Nothing -> return i
-        else return i
-  dropped <- go 0 b0
+          (shouldContinue,b') <- p b a
+          if shouldContinue
+            then go (i + 1) b'
+            else return (i,b')
+        else return (i,b)
+  (dropped,b') <- go 0 b0
   newArrList <- minimizeMemory $ ArrayList (start + dropped) (len - dropped) bufLen ptr
-  return (newArrList,dropped)
+  return (newArrList,dropped,b')
 
 
 dropL :: forall a. Storable a => ArrayList a -> Int -> IO (ArrayList a)
