@@ -14,6 +14,7 @@ module ArrayList
   , pushR
   , popL
   , dropWhileL
+  , dropWhileML
   , dropL
   , dump
   , dumpList
@@ -33,6 +34,7 @@ import GHC.Prim ((*#),copyAddrToByteArray#)
 import Data.Primitive hiding (sizeOf)
 import Data.Primitive.Types
 import Data.Bits (unsafeShiftR)
+import BTree.Store (Initialize(..),Deinitialize(..))
 import qualified Data.Primitive as PM
 import qualified Foreign.Marshal.Alloc as FMA
 
@@ -55,6 +57,13 @@ instance Storable (ArrayList a) where
     poke (plusPtr ptr wordSz) b
     poke (plusPtr ptr (wordSz + wordSz)) c
     poke (plusPtr ptr (wordSz + wordSz + wordSz)) d
+
+instance Storable a => Initialize (ArrayList a) where
+  initialize ptr = do
+    poke (castPtr ptr) (0 :: Int)
+    poke (plusPtr ptr wordSz) (0 :: Int)
+    poke (plusPtr ptr (wordSz + wordSz)) initialSize
+    poke (plusPtr ptr (wordSz + wordSz + wordSz)) =<< FMA.mallocBytes (sizeOf (undefined :: a) * initialSize)
 
 wordSz :: Int
 wordSz = sizeOf (undefined :: Int)
@@ -120,6 +129,22 @@ dropWhileL (ArrayList start len bufLen ptr) p = do
   dropped <- go 0
   newArrList <- minimizeMemory $ ArrayList (start + dropped) (len - dropped) bufLen ptr
   return (newArrList,dropped)
+
+dropWhileML :: forall a. Storable a => ArrayList a -> (a -> IO Bool) -> IO (ArrayList a,Int)
+dropWhileML (ArrayList start len bufLen ptr) p = do
+  let go :: Int -> IO Int
+      go !i = if i < len
+        then do
+          a <- peek (advancePtr ptr (start + i))
+          b <- p a
+          if b
+            then go (i + 1)
+            else return i
+        else return i
+  dropped <- go 0
+  newArrList <- minimizeMemory $ ArrayList (start + dropped) (len - dropped) bufLen ptr
+  return (newArrList,dropped)
+
 
 dropL :: forall a. Storable a => ArrayList a -> Int -> IO (ArrayList a)
 dropL (ArrayList start len bufLen ptr) n = do
