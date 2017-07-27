@@ -9,6 +9,7 @@
 
 module ArrayList
   ( ArrayList
+  , size
   , with
   , new
   , pushR
@@ -71,6 +72,9 @@ wordSz = sizeOf (undefined :: Int)
   
 initialSize :: Int
 initialSize = 4
+
+size :: ArrayList a -> Int
+size (ArrayList _ len _ _) = len
 
 with :: Storable a => (ArrayList a -> IO (ArrayList a,b)) -> IO b
 with f = do
