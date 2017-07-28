@@ -4,12 +4,13 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
-{-# OPTIONS_GHC -Wall -Werror #-}
+{-# OPTIONS_GHC -Wall -Werror -O2 #-}
 
 module BTree.Store
   ( BTree
   , Initialize(..)
   , Deinitialize(..)
+  , Decision(..)
   , new
   , free
   , with
@@ -18,6 +19,7 @@ module BTree.Store
   , insert
   , modifyWithM_
   , modifyWithM
+  , modifyWithPtr
   , foldrWithKey
   , toAscList
   ) where
@@ -288,6 +290,11 @@ calcChildDegree _ =
       allowedValues = quot space (sizeOf (undefined :: v) + sizeOf (undefined :: k))
    in allowedValues + 1 -- add one because of the meaning we assign to degree
 
+{-# INLINABLE lookup #-}
+-- {-# SPECIALIZE lookup :: BTree Int Int -> Int -> IO (Maybe Int) #-}
+-- {-# SPECIALIZE lookup :: BTree Int64 Int -> Int64 -> IO (Maybe Int) #-}
+-- {-# SPECIALIZE lookup :: BTree Word32 Int -> Word32 -> IO (Maybe Int) #-}
+-- {-# SPECIALIZE lookup :: BTree Word16 Int -> Word16 -> IO (Maybe Int) #-}
 lookup :: forall k v. (Ord k, Storable k, Storable v)
   => BTree k v -> k -> IO (Maybe v)
 lookup (BTree height rootNode) k = go height rootNode
@@ -297,21 +304,21 @@ lookup (BTree height rootNode) k = go height rootNode
   childDegree :: Int
   childDegree = calcChildDegree rootNode
   go :: Int -> Ptr (Node k v) -> IO (Maybe v)
-  go n ptrNode = if n > 0
+  go !n !ptrNode = if n > 0
     then do
-      sz <- readNodeSize ptrNode
-      let KeysNodes keys nodes = readNodeKeysNodes branchDegree ptrNode
-      ix <- findIndexOfGtElem keys k sz
+      !sz <- readNodeSize ptrNode
+      let !(KeysNodes keys nodes) = readNodeKeysNodes branchDegree ptrNode
+      !ix <- findIndexOfGtElem keys k sz
       !node <- readArr nodes ix
       go (n - 1) node
     else do
-      sz <- readNodeSize ptrNode
-      let KeysValues keys values = readNodeKeysValues childDegree ptrNode
-      ix <- findIndex keys k sz
+      !sz <- readNodeSize ptrNode
+      let !(KeysValues keys values) = readNodeKeysValues childDegree ptrNode
+      !ix <- findIndex keys k sz
       if ix < 0
         then return Nothing
         else do
-          v <- readArr values ix
+          !v <- readArr values ix
           return (Just v)
 
 data Insert k v r
@@ -381,6 +388,10 @@ modifyWithM bt k alter = do
     )
   return (a,bt')
 
+{-# INLINABLE modifyWithPtr #-}
+-- {-# SPECIALIZE modifyWithPtr :: BTree Int Int -> Int -> (Either () (Ptr Int -> Int -> IO ())) -> (Ptr Int -> Int -> IO ((),Decision)) -> IO ((), BTree Int Int) #-}
+-- {-# SPECIALIZE modifyWithPtr :: BTree Word32 Int -> Word32 -> (Either r (Ptr Int -> Int -> IO r)) -> (Ptr Int -> Int -> IO (r,Decision)) -> IO (r, BTree Word32 Int) #-}
+-- {-# SPECIALIZE modifyWithPtr :: BTree Int64 Int -> Int64 -> (Either r (Ptr Int -> Int -> IO r)) -> (Ptr Int -> Int -> IO (r,Decision)) -> IO (r, BTree Int64 Int) #-}
 modifyWithPtr :: forall k v r. (Ord k, Storable k, Initialize v)
   => BTree k v 
   -> k

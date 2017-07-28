@@ -11,16 +11,19 @@ module Main
   ) where
 
 import qualified BTree.Linear as BTL
-import qualified BTree.Compact as BTC
+import qualified BTree.Store as BTS
 import Control.Monad
-import Data.Primitive.Compact (Token,withToken)
 import GHC.Prim
 import System.Mem (performGC)
 import Data.Hashable
 import Data.Maybe
 import System.Clock
+import Foreign.Ptr (Ptr)
+import Data.Int
 
 -- this specialization does not seem to work.
+-- relying on specialize pragmas is the worst.
+-- {-# SPECIALIZE BTS.modifyWithPtr :: BTS.BTree Int Int -> Int -> (Either r (Ptr Int -> Int -> IO r)) -> (Ptr Int -> Int -> IO (r,BTS.Decision)) -> IO (r, BTS.BTree Int Int) #-}
 -- {-# SPECIALIZE BTC.modifyWithM :: BTC.Context RealWorld c -> BTC.BTree RealWorld Int Int c -> Int -> (Maybe Int -> IO Int) -> IO (Int, BTC.BTree RealWorld Int Int c) #-}
 
 main :: IO ()
@@ -28,7 +31,7 @@ main = do
   putStrLn "Starting benchmark suite"
   let multiplier = 5
   let total   = 200000 * multiplier
-      range   = 10000000 * multiplier
+      range   = 1000000 * multiplier
       lookups = 100000 * multiplier
   putStrLn $ concat
     [ "This benchmark will insert "
@@ -54,19 +57,20 @@ main = do
     putStrLn "On-heap tree, Amount of time taken for lookups: "
     putStrLn (showTimeSpec (diffTimeSpec end start))
     performGC
-  withToken $ \token -> do
+  BTS.with_ $ \b0 -> do
     buildStart <- getTime Monotonic
-    (b,ctx) <- offHeapBTree token total range
+    b1 <- offHeapBTree b0 total range
     buildEnd <- getTime Monotonic
     performGC
     start <- getTime Monotonic
-    x <- lookupManyOffHeap lookups b
+    x <- lookupManyOffHeap lookups b1
     end <- getTime Monotonic
     putStrLn ("Accumulated sum (not a benchmark): " ++ show x)
     putStrLn "Off-heap tree, Amount of time taken to build: "
     putStrLn (showTimeSpec (diffTimeSpec buildEnd buildStart))
     putStrLn "Off-heap tree, Amount of time taken for lookups: "
     putStrLn (showTimeSpec (diffTimeSpec end start))
+    return b1
   
 lookupMany :: Int -> BTL.BTree RealWorld Int Int -> BTL.Context RealWorld -> IO Int
 lookupMany total b ctx = go 0 0
@@ -77,12 +81,12 @@ lookupMany total b ctx = go 0 0
       go (n + 1) (s + fromMaybe 0 m)  
     else return s
 
-lookupManyOffHeap :: Int -> BTC.BTree Int Int RealWorld c -> IO Int
+lookupManyOffHeap :: Int -> BTS.BTree Int Int -> IO Int
 lookupManyOffHeap total b = go 0 0
   where
   go !n !s = if n < total
     then do
-      m <- BTC.lookup b n
+      m <- BTS.lookup b n
       go (n + 1) (s + fromMaybe 0 m) 
     else return s
   
@@ -100,19 +104,17 @@ onHeapBTree total range = do
   go 0 b0
 
 offHeapBTree ::
-     Token c 
+     BTS.BTree Int Int
   -> Int
   -> Int
-  -> IO (BTC.BTree Int Int RealWorld c, BTC.Context RealWorld c)
-offHeapBTree token total range = do
-  ctx <- BTC.newContext 100 token
-  b0 <- BTC.new ctx
+  -> IO (BTS.BTree Int Int)
+offHeapBTree b0 total range = do
   let go !n !b = if n < total
         then do
           let x = mod (hashWithSalt mySalt n) range
-          b' <- BTC.insert ctx b x x
+          b' <- BTS.insert b x x
           go (n + 1) b'
-        else return (b,ctx)
+        else return b
   go 0 b0
 
 

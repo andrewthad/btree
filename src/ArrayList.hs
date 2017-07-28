@@ -5,7 +5,7 @@
 {-# LANGUAGE MagicHash #-}
 {-# LANGUAGE UnboxedTuples #-}
 
-{-# OPTIONS_GHC -Wall #-}
+{-# OPTIONS_GHC -Wall -O2 #-}
 
 module ArrayList
   ( ArrayList
@@ -88,6 +88,7 @@ new = do
   ptr <- FMA.mallocBytes (sizeOf (undefined :: a) * initialSize)
   return (ArrayList 0 0 initialSize ptr)
 
+{-# INLINABLE pushR #-}
 pushR :: forall a. Storable a => ArrayList a -> a -> IO (ArrayList a)
 pushR (ArrayList start len bufLen ptr) a = if start + len < bufLen
   then do
@@ -135,6 +136,7 @@ dropWhileL (ArrayList start len bufLen ptr) p = do
   newArrList <- minimizeMemory $ ArrayList (start + dropped) (len - dropped) bufLen ptr
   return (newArrList,dropped)
 
+{-# INLINABLE dropWhileScanL #-}
 dropWhileScanL :: forall a b. Storable a => ArrayList a -> b -> (b -> a -> IO (Bool,b)) -> IO (ArrayList a,Int,b)
 dropWhileScanL (ArrayList start len bufLen ptr) b0 p = do
   let go :: Int -> b -> IO (Int,b)
