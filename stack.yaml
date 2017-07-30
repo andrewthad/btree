@@ -37,6 +37,10 @@ resolver: lts-8.16
 # will not be run. This is useful for tweaking upstream packages.
 packages:
 - '.'
+- location:
+    git:    'https://github.com/andrewthad/prim-array'
+    commit: '5a63fb26bcbaded6b9de70262568d1abec0824ad'
+  extra-dep: true
 # Dependency packages to be pulled from upstream that are not in the resolver
 # (e.g., acme-missiles-0.3)
 extra-deps:
