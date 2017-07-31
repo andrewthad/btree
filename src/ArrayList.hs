@@ -13,6 +13,7 @@ module ArrayList
   , with
   , new
   , pushR
+  , pushArrayR
   , popL
   , dropWhileL
   , dropWhileScanL
@@ -95,14 +96,6 @@ pushR (ArrayList start len bufLen ptr) a = if start + len < bufLen
     poke (advancePtr ptr (start + len)) a
     return (ArrayList start (len + 1) bufLen ptr)
   else if
-      -- this quarter case may not actually be needed since
-      -- the pop functions have to check for this.
-    | len < quarter bufLen -> do
-        newPtr <- FMA.mallocBytes (sizeOf (undefined :: a) * div bufLen 2)
-        moveArray newPtr (advancePtr ptr start) len
-        FMA.free ptr
-        poke (advancePtr newPtr len) a
-        return (ArrayList 0 (len + 1) (div bufLen 2) newPtr)
     | len < half bufLen -> do
         moveArray ptr (advancePtr ptr start) len
         poke (advancePtr ptr len) a
@@ -113,6 +106,37 @@ pushR (ArrayList start len bufLen ptr) a = if start + len < bufLen
         FMA.free ptr
         poke (advancePtr newPtr len) a
         return (ArrayList 0 (len + 1) (bufLen * 2) newPtr)
+
+-- should probably write a test for this function.
+pushArrayR :: forall a. (Storable a, Prim a) => ArrayList a -> PrimArray a -> IO (ArrayList a)
+pushArrayR (ArrayList start len bufLen ptr) as =
+  if start + len + asLen < bufLen
+    then do
+      copyPrimArrayToPtr (advancePtr ptr (start + len)) as 0 asLen
+      return (ArrayList start (len + asLen) bufLen ptr)
+    else if
+      -- this might give poor guarentees concerning worst
+      -- case behaviors, but whatever for now.
+      | len < half bufLen && asLen < half bufLen -> do
+          moveArray ptr (advancePtr ptr start) len
+          copyPrimArrayToPtr (advancePtr ptr len) as 0 asLen
+          return (ArrayList 0 (len + asLen) bufLen ptr)
+      | otherwise -> do
+          let newBufLen = twiceUntilExceeds (2 * bufLen) (len + asLen)
+          newPtr <- FMA.mallocBytes (sizeOf (undefined :: a) * newBufLen)
+          moveArray newPtr (advancePtr ptr start) len
+          FMA.free ptr
+          copyPrimArrayToPtr (advancePtr ptr len) as 0 asLen
+          return (ArrayList 0 (len + asLen) newBufLen newPtr)
+  where
+  asLen = sizeofPrimArray as
+
+twiceUntilExceeds :: Int -> Int -> Int
+twiceUntilExceeds !i !limit = go i where 
+  go !n = if n > limit
+    then n
+    else go (n * 2)
+ 
 
 popL :: forall a. Storable a => ArrayList a -> IO (ArrayList a, Maybe a)
 popL xs@(ArrayList start len bufLen ptr)

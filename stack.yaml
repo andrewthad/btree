@@ -39,7 +39,7 @@ packages:
 - '.'
 - location:
     git:    'https://github.com/andrewthad/prim-array'
-    commit: '5a63fb26bcbaded6b9de70262568d1abec0824ad'
+    commit: '03ac31ecd775614017029fe81ab79e3de234700c'
   extra-dep: true
 # Dependency packages to be pulled from upstream that are not in the resolver
 # (e.g., acme-missiles-0.3)
