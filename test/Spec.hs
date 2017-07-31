@@ -154,7 +154,7 @@ arrayListDropWhile xs = unsafePerformIO $ AL.with $ \a0 ->
     [] -> return (a0, Right "good")
     x : _ -> do
      a1 <- foldlM AL.pushR a0 xs
-     (a2,_) <- AL.dropWhileL a1 (/= x)
+     (a2,_) <- AL.dropWhileL a1 (\y -> return (y /= x))
      (a3,ys) <- AL.dumpList a2
      let expected = L.dropWhile (/= x) xs
      return $ (,) a3 $ if expected == ys
