@@ -12,6 +12,7 @@ module ArrayList
   , size
   , with
   , new
+  , free
   , pushR
   , pushArrayR
   , popL
@@ -107,7 +108,6 @@ pushR (ArrayList start len bufLen ptr) a = if start + len < bufLen
         poke (advancePtr newPtr len) a
         return (ArrayList 0 (len + 1) (bufLen * 2) newPtr)
 
--- should probably write a test for this function.
 pushArrayR :: forall a. (Storable a, Prim a) => ArrayList a -> PrimArray a -> IO (ArrayList a)
 pushArrayR (ArrayList start len bufLen ptr) as =
   if start + len + asLen < bufLen
@@ -126,7 +126,7 @@ pushArrayR (ArrayList start len bufLen ptr) as =
           newPtr <- FMA.mallocBytes (sizeOf (undefined :: a) * newBufLen)
           moveArray newPtr (advancePtr ptr start) len
           FMA.free ptr
-          copyPrimArrayToPtr (advancePtr ptr len) as 0 asLen
+          copyPrimArrayToPtr (advancePtr newPtr len) as 0 asLen
           return (ArrayList 0 (len + asLen) newBufLen newPtr)
   where
   asLen = sizeofPrimArray as
@@ -146,7 +146,10 @@ popL xs@(ArrayList start len bufLen ptr)
       newArrList <- minimizeMemory (ArrayList (start + 1) (len - 1) bufLen ptr)
       return (newArrList, Just a)
 
-dropWhileL :: forall a. Storable a => ArrayList a -> (a -> IO Bool) -> IO (ArrayList a,Int)
+dropWhileL :: forall a. Storable a
+  => ArrayList a
+  -> (a -> IO Bool) -- ^ predicate
+  -> IO (ArrayList a,Int)
 dropWhileL (ArrayList start len bufLen ptr) p = do
   let go :: Int -> IO Int
       go !i = if i < len
@@ -162,13 +165,17 @@ dropWhileL (ArrayList start len bufLen ptr) p = do
   return (newArrList,dropped)
 
 {-# INLINABLE dropWhileScanL #-}
-dropWhileScanL :: forall a b. Storable a => ArrayList a -> b -> (b -> a -> IO (Bool,b)) -> IO (ArrayList a,Int,b)
+dropWhileScanL :: forall a b. Storable a
+  => ArrayList a
+  -> b
+  -> (b -> a -> IO (Bool,b))
+  -> IO (ArrayList a,Int,b)
 dropWhileScanL (ArrayList start len bufLen ptr) b0 p = do
   let go :: Int -> b -> IO (Int,b)
       go !i !b = if i < len
         then do
-          a <- peek (advancePtr ptr (start + i))
-          (shouldContinue,b') <- p b a
+          !a <- peek (advancePtr ptr (start + i))
+          (!shouldContinue,!b') <- p b a
           if shouldContinue
             then go (i + 1) b'
             else return (i,b')
@@ -177,7 +184,12 @@ dropWhileScanL (ArrayList start len bufLen ptr) b0 p = do
   newArrList <- minimizeMemory $ ArrayList (start + dropped) (len - dropped) bufLen ptr
   return (newArrList,dropped,b')
 
-dropScanL :: forall a b. Storable a => ArrayList a -> Int -> b -> (b -> a -> IO b) -> IO (ArrayList a, b)
+dropScanL :: forall a b. Storable a
+  => ArrayList a
+  -> Int
+  -> b
+  -> (b -> a -> IO b)
+  -> IO (ArrayList a, b)
 dropScanL (ArrayList start len bufLen ptr) n b0 p = do
   let !m = min n len
   let go :: Int -> b -> IO b

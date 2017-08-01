@@ -115,6 +115,7 @@ arraylistTests =
   , testPropDepth 150 "arraylist inserts followed by dump (long)" (over word32Series arrayListInsertions)
   , testPropDepth 150 "arraylist inserts followed by repeated pop (long)" (over word32Series pushPop)
   , testPropDepth 50 "arraylist dropWhile" (over word32Series arrayListDropWhile)
+  , testPropDepth 50 "insert array" (over word32Series arrayListInsertArray)
   -- , testPropDepth 150 "arraylist push, pop, twice (long)" (over word32Series pushPopTwice)
   ]
 
@@ -161,6 +162,20 @@ arrayListDropWhile xs = unsafePerformIO $ AL.with $ \a0 ->
        then Right "good"
        else Left ("expected " ++ show expected ++ " but got " ++ show ys ++ " using pivot of " ++ show x)
   
+arrayListInsertArray :: forall a. (Hashable a, Eq a, Show a, Prim a, Storable a)
+  => [a] -> Either String String
+arrayListInsertArray xs = unsafePerformIO $ AL.with $ \a0 -> do
+  a1 <- foldlM AL.pushArrayR a0 (map P.singletonPrimArray xs)
+  let go :: AL.ArrayList a -> IO (AL.ArrayList a, [a])
+      go al = do
+        (al',m) <- AL.popL al
+        case m of
+          Nothing -> return (al',[])
+          Just a -> fmap (second (a:)) (go al')
+  (a2,ys) <- go a1
+  return $ (,) a2 $ if xs == ys
+    then Right "good"
+    else Left $ "expected " ++ show xs ++ " but got " ++ show ys
   
 
 
@@ -202,6 +217,12 @@ unitTests = testGroup "Unit tests"
           xs' = map (\x -> (x,x)) xs
       actual <- return (runST (B.fromList (B.Context (BTL.Context 4)) xs' >>= B.toAscList))
       actual @?= S.toAscList (S.fromList xs')
+  , testCase "ArrayList dropWhileScanL on empty" $ do
+      xs <- AL.new
+      (xs',n,r) <- AL.dropWhileScanL xs (55 :: Word32) (\b a -> return (True,b + a))
+      n @?= 0
+      r @?= 55
+      AL.free xs'
   ]
 
 testPropDepth :: Testable IO a => Int -> String -> a -> TestTree

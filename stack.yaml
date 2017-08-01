@@ -38,8 +38,8 @@ resolver: lts-8.16
 packages:
 - '.'
 - location:
-    git:    'https://github.com/andrewthad/prim-array'
-    commit: '03ac31ecd775614017029fe81ab79e3de234700c'
+    git: 'https://github.com/andrewthad/prim-array'
+    commit: 'cced789be477f7707f1ebfb30e03a98c8c94f2a1'
   extra-dep: true
 # Dependency packages to be pulled from upstream that are not in the resolver
 # (e.g., acme-missiles-0.3)
