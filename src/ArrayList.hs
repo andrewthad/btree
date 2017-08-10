@@ -21,6 +21,7 @@ module ArrayList
   , dropScanL
   , dropL
   , dump
+  , dumpMap
   , dumpList
   , clear
   , showDebug
@@ -250,9 +251,24 @@ primArrayToList len arr = go 0
 -- | Deletes all elements from the linked list, copying them
 --   into the buffer specified by the pointer. Returns an
 --   empty linked list.
-dump :: forall a. (Prim a, Storable a) => ArrayList a -> MutablePrimArray RealWorld a -> Int -> IO (ArrayList a)
+dump :: (Prim a, Storable a)
+  => ArrayList a -> MutablePrimArray RealWorld a -> Int -> IO (ArrayList a)
 dump xs@(ArrayList start len _ ptr) marr ix = do
-  copyPtrToMutablePrimArray marr ix (plusPtr ptr (start * PM.sizeOf (undefined :: a))) len
+  copyPtrToMutablePrimArray marr ix (advancePtr ptr start) len
+  clear xs
+
+-- | Dump the elements into a 'MutablePrimArray', mapping over them
+--   first. This is a fairly niche function.
+dumpMap :: (Storable a, Prim b)
+  => ArrayList a -> (a -> b) -> MutablePrimArray RealWorld b -> Int -> IO (ArrayList a)
+dumpMap xs@(ArrayList start len _ ptr) f marr ix = do
+  let go :: Int -> IO ()
+      go !i = if i < len
+        then do
+          a <- peekElemOff ptr (start + i)
+          writePrimArray marr (ix + i) (f a)
+        else return ()
+  go 0
   clear xs
 
 -- | Does not affect the contents of the ArrayList
