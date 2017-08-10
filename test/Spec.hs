@@ -34,8 +34,9 @@ import Data.Hashable
 import Foreign.Storable
 import GHC.TypeLits
 import Foreign.Ptr
-import Control.Monad.Random.Strict
+import Control.Monad.Random.Strict hiding (fromList)
 import Data.Bifunctor
+import GHC.Exts (fromList)
 
 import qualified Data.List as L
 import qualified Data.List.NonEmpty as NE
@@ -82,7 +83,7 @@ properties :: TestTree
 properties = testGroup "Properties" [scProps]
 
 smallcheckTests :: 
-     (forall n. KnownNat n => [Padded n] -> Either Reason Reason)
+     (forall x. (Hashable x, Show x, Ord x, Eq x, BTS.Initialize x, BTS.Deinitialize x, Bounded x, Integral x) => [x] -> Either Reason Reason)
   -> [TestTree]
 smallcheckTests f = 
   [ testPropDepth 3 "small maps with 256 bit keys and values, all permutations, no splitting"
@@ -107,6 +108,8 @@ smallcheckTests f =
       (over (singletonSeriesA (Proxy :: Proxy 128)) f)
   , testPropDepth 150 "large maps of degree 7, repeat keys certain, one permutation"
       (over (singletonSeriesB (Proxy :: Proxy 128)) f)
+  , testPropDepth 200 "large maps" (over word32Series f)
+  -- , testPropDepth 1050 "large maps with Word16" (over word16SeriesSingles f)
   ]
 
 arraylistTests :: [TestTree]
@@ -116,6 +119,8 @@ arraylistTests =
   , testPropDepth 150 "arraylist inserts followed by repeated pop (long)" (over word32Series pushPop)
   , testPropDepth 50 "arraylist dropWhile" (over word32Series arrayListDropWhile)
   , testPropDepth 50 "insert array" (over word32Series arrayListInsertArray)
+  , testPropDepth 100 "insert big array" (over word32Series arrayListInsertBigArray)
+  , testPropDepth 100 "insert big arrays" (over word32Series arrayListInsertArrays)
   -- , testPropDepth 150 "arraylist push, pop, twice (long)" (over word32Series pushPopTwice)
   ]
 
@@ -177,7 +182,36 @@ arrayListInsertArray xs = unsafePerformIO $ AL.with $ \a0 -> do
     then Right "good"
     else Left $ "expected " ++ show xs ++ " but got " ++ show ys
   
+arrayListInsertBigArray :: forall a. (Hashable a, Eq a, Show a, Prim a, Storable a)
+  => [a] -> Either String String
+arrayListInsertBigArray xs = unsafePerformIO $ AL.with $ \a0 -> do
+  a1 <- AL.pushArrayR a0 (fromList xs)
+  let go :: AL.ArrayList a -> IO (AL.ArrayList a, [a])
+      go al = do
+        (al',m) <- AL.popL al
+        case m of
+          Nothing -> return (al',[])
+          Just a -> fmap (second (a:)) (go al')
+  (a2,ys) <- go a1
+  return $ (,) a2 $ if xs == ys
+    then Right "good"
+    else Left $ "expected " ++ show xs ++ " but got " ++ show ys
 
+arrayListInsertArrays :: forall a. (Hashable a, Eq a, Show a, Prim a, Storable a)
+  => [a] -> Either String String
+arrayListInsertArrays xs = unsafePerformIO $ AL.with $ \a0 -> do
+  a1 <- AL.pushArrayR a0 (fromList xs)
+  a2 <- AL.pushArrayR a1 (fromList xs)
+  let go :: AL.ArrayList a -> IO (AL.ArrayList a, [a])
+      go al = do
+        (al',m) <- AL.popL al
+        case m of
+          Nothing -> return (al',[])
+          Just a -> fmap (second (a:)) (go al')
+  (a3,zs) <- go a2
+  return $ (,) a3 $ if zs == (xs ++ xs)
+    then Right "good"
+    else Left $ "expected " ++ show (xs ++ xs) ++ " but got " ++ show zs
 
 unitTests :: TestTree
 unitTests = testGroup "Unit tests"
@@ -312,8 +346,8 @@ ordering degree xs' =
 --     then Right "good"
 --     else Left (notice (show expected) (show actual) layout)
 
-orderingStorable :: KnownNat n
-  => [Padded n] -- ^ values to insert
+orderingStorable :: (Hashable x, Show x, Eq x, Ord x, Storable x, BTS.Initialize x, BTS.Deinitialize x)
+  => [x] -- ^ values to insert
   -> Either Reason Reason
 orderingStorable xs = 
   let expected = map (\x -> (x,x)) $ S.toAscList $ S.fromList xs
@@ -344,8 +378,8 @@ orderingStorable xs =
 
 
 -- let us begin the most dangerous game.
-orderingNested :: KnownNat n
-  => [Padded n] -- ^ values to insert
+orderingNested :: (Bounded x, Integral x, Hashable x, Show x, Eq x, Ord x, Storable x, BTS.Initialize x, BTS.Deinitialize x)
+  => [x] -- ^ values to insert
   -> Either Reason Reason
 orderingNested xs = 
   let e = unsafePerformIO $ BTS.with $ \m0 -> do
@@ -402,6 +436,12 @@ word16Series = (scanSeries (\n -> [n + 89, n + 71]) 0)
 
 word32Series :: Series m [Word32]
 word32Series = (scanSeries (\n -> [n + 73]) 0)
+
+word16SeriesSingles :: Series m [Word16]
+word16SeriesSingles = (scanSeries (\n -> [n + 73]) 0)
+
+word32SeriesAlt :: Series m [Word32]
+word32SeriesAlt = (scanSeries (\n -> [n + 73, n + 89]) 0)
 
 newtype Padded (n :: Nat) = Padded Word
   deriving (Eq,Ord,Bounded,Hashable,Integral,Real,Num,Enum)

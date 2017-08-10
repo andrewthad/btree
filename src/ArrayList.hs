@@ -110,6 +110,7 @@ pushR (ArrayList start len bufLen ptr) a = if start + len < bufLen
 
 pushArrayR :: forall a. (Storable a, Prim a) => ArrayList a -> PrimArray a -> IO (ArrayList a)
 pushArrayR (ArrayList start len bufLen ptr) as =
+  -- I think this should actually be less than or equal to
   if start + len + asLen < bufLen
     then do
       copyPrimArrayToPtr (advancePtr ptr (start + len)) as 0 asLen

@@ -4,7 +4,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
-{-# OPTIONS_GHC -Wall -Werror -O2 #-}
+-- {-# OPTIONS_GHC -Wall -Werror -O2 #-}
 
 module BTree.Store
   ( BTree
@@ -31,6 +31,9 @@ import Foreign.Marshal.Alloc hiding (free)
 import Foreign.Marshal.Array
 import Data.Bits
 import Data.Word
+import Data.Int
+import GHC.Ptr (Ptr(..))
+import qualified Data.Primitive.Addr as PA
 import qualified Foreign.Marshal.Alloc as FMA
 
 data BTree k v = BTree 
@@ -93,6 +96,9 @@ instance Storable (BTree k v) where
 -- this instance relies on Int and Ptr being the same
 -- size. this seems to be true for everything that
 -- GHC targets.
+--
+-- This instance bypasses the check on the size of the keys
+-- and values. This is not good.
 instance Initialize (BTree k v) where
   initialize ptr = do
     pokeElemOff (castPtr ptr :: Ptr Int) 0 (0 :: Int)
@@ -137,9 +143,9 @@ instance Deinitialize Word16 where
   deinitializeElems _ _ = return ()
 
 instance Initialize Word where
-  initialize _ = return ()
-  initializeElemOff _ _ = return ()
-  initializeElems _ _ = return ()
+  initialize ptr = poke ptr (0 :: Word)
+  initializeElemOff ptr off = pokeElemOff ptr off (0 :: Word)
+  initializeElems ptr elemLen = PA.setAddr (ptrToAddr ptr) elemLen (0 :: Word)
 
 instance Deinitialize Word where
   deinitialize _ = return ()
@@ -148,10 +154,31 @@ instance Deinitialize Word where
 
 instance Initialize Int where
   initialize ptr = poke ptr (0 :: Int)
-  -- initializeElemOff _ _ = return ()
-  -- initializeElems _ _ = return ()
+  initializeElemOff ptr off = pokeElemOff ptr off (0 :: Int)
+  initializeElems ptr elemLen = PA.setAddr (ptrToAddr ptr) elemLen (0 :: Int)
+
+instance Initialize Int64 where
+  initialize ptr = poke ptr (0 :: Int64)
+  initializeElemOff ptr off = pokeElemOff ptr off (0 :: Int64)
+  initializeElems ptr elemLen = PA.setAddr (ptrToAddr ptr) elemLen (0 :: Int64)
+
+ptrToAddr :: Ptr a -> PA.Addr
+ptrToAddr (Ptr x) = PA.Addr x
+
+instance Initialize Word32 where
+  initialize ptr = poke ptr (0 :: Word32)
+
+instance Deinitialize Word32 where
+  deinitialize _ = return ()
+  deinitializeElemOff _ _ = return ()
+  deinitializeElems _ _ = return ()
 
 instance Deinitialize Int where
+  deinitialize _ = return ()
+  deinitializeElemOff _ _ = return ()
+  deinitializeElems _ _ = return ()
+
+instance Deinitialize Int64 where
   deinitialize _ = return ()
   deinitializeElemOff _ _ = return ()
   deinitializeElems _ _ = return ()
@@ -276,18 +303,27 @@ maxSize = 4096 - 2 * sizeOf (undefined :: Int)
 
 -- not actually sure if this is really correct.
 calcBranchDegree :: forall k v. (Storable k, Storable v) => Ptr (Node k v) -> Int
-calcBranchDegree _ = 
-  let space = maxSize - max (sizeOf (undefined :: Int)) (alignment (undefined :: k)) - sizeOf (undefined :: Ptr (Node k v))
-      allowedNodes = quot space (sizeOf (undefined :: Ptr (Node k v)) + sizeOf (undefined :: k))
+calcBranchDegree _ = calcBranchDegreeInt (sizeOf (undefined :: k)) (alignment (undefined :: k))
+
+calcBranchDegreeInt :: Int -> Int -> Int
+calcBranchDegreeInt keySz keyAlignment = 
+  let space = maxSize - max (sizeOf (undefined :: Int)) keyAlignment - sizeOf (undefined :: Ptr a)
+      allowedNodes = quot space (sizeOf (undefined :: Ptr a) + keySz)
    in allowedNodes
 
 -- not actually sure if this is really correct. need to think about this math
 -- a little more. Or I guess I could write something that does a brute force
 -- consideration of all the possible sizes and alignment. That would convince me.
 calcChildDegree :: forall k v. (Storable k, Storable v) => Ptr (Node k v) -> Int
-calcChildDegree _ = 
-  let space = maxSize - max (sizeOf (undefined :: Int)) (alignment (undefined :: k)) - sizeOf (undefined :: v)
-      allowedValues = quot space (sizeOf (undefined :: v) + sizeOf (undefined :: k))
+calcChildDegree _ = calcChildDegreeInt
+  (sizeOf (undefined :: k))
+  (alignment (undefined :: k))
+  (sizeOf (undefined :: v))
+
+calcChildDegreeInt :: Int -> Int -> Int -> Int
+calcChildDegreeInt keySz keyAlignment valueSz = 
+  let space = maxSize - max (sizeOf (undefined :: Int)) keyAlignment - valueSz
+      allowedValues = quot space (valueSz + keySz)
    in allowedValues + 1 -- add one because of the meaning we assign to degree
 
 {-# INLINABLE lookup #-}
