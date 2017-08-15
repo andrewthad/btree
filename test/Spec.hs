@@ -128,6 +128,9 @@ scProps :: TestTree
 scProps = testGroup "smallcheck"
   [ testGroup "unmanaged heap" (smallcheckTests orderingStorable)
   , testGroup "unmanaged heap nested" (smallcheckTests orderingNested)
+  -- the diverse ones take too long to run
+  -- , testGroup "unmanaged heap nested diverse" (smallcheckTests orderingNestedDiverse)
+  -- deletion does not work yet
   -- , testGroup "unmanaged heap deletions" (smallcheckTests deletionStorable)
   , testGroup "arraylist" arraylistTests
   ]
@@ -397,6 +400,32 @@ orderingNested xs =
             Nothing -> ExceptT (return (Left ("could not find " ++ show x ++ " in top b-tree")))
             Just b -> do
               n <- lift $ BTS.lookup b x
+              case n of
+                Nothing -> ExceptT (return (Left ("could not find " ++ show x ++ " in bottom b-tree")))
+                Just k -> return ()
+        return (e,m1)
+   in fmap (const "good") e
+
+orderingNestedDiverse :: (Bounded x, Integral x, Hashable x, Show x, Eq x, Ord x, Storable x, BTS.Initialize x, BTS.Deinitialize x)
+  => [x] -- ^ values to insert
+  -> Either Reason Reason
+orderingNestedDiverse xs = 
+  let e = unsafePerformIO $ BTS.with $ \m0 -> do
+        let topSub = 600 :: Word32
+            subValues = enumFromTo 0 topSub
+        m1 <- foldlM
+          (\ !mtop !x -> do
+            foldM 
+              ( \ !m !y -> BTS.modifyWithM_ m x $ \mbottom ->
+                  BTS.insert mbottom y y
+              ) mtop subValues
+          ) m0 xs
+        e <- runExceptT $ forM_ xs $ \x -> do
+          m <- lift $ BTS.lookup m1 x 
+          case m of
+            Nothing -> ExceptT (return (Left ("could not find " ++ show x ++ " in top b-tree")))
+            Just b -> do
+              n <- lift $ BTS.lookup b topSub
               case n of
                 Nothing -> ExceptT (return (Left ("could not find " ++ show x ++ " in bottom b-tree")))
                 Just k -> return ()

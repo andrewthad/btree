@@ -102,7 +102,7 @@ instance Storable (BTree k v) where
 instance Initialize (BTree k v) where
   initialize ptr = do
     pokeElemOff (castPtr ptr :: Ptr Int) 0 (0 :: Int)
-    pokeElemOff (castPtr ptr :: Ptr (Ptr (Node k v))) 1 =<< newNode 1
+    pokeElemOff (castPtr ptr :: Ptr (Ptr (Node k v))) 1 =<< newNode 0
 
 instance (Storable k, Deinitialize v) => Deinitialize (BTree k v) where
   deinitialize ptr = do
