@@ -22,6 +22,9 @@ module BTree.Store
   , modifyWithPtr
   , foldrWithKey
   , toAscList
+  -- * Force inlining
+  , inlineModifyWithPtr
+  , inlineModifyWithM
   ) where
 
 import Prelude hiding (lookup)
@@ -426,17 +429,43 @@ modifyWithM bt k alter = do
     )
   return (a,bt')
 
-{-# INLINABLE modifyWithPtr #-}
--- {-# SPECIALIZE modifyWithPtr :: BTree Int Int -> Int -> (Either () (Ptr Int -> Int -> IO ())) -> (Ptr Int -> Int -> IO ((),Decision)) -> IO ((), BTree Int Int) #-}
--- {-# SPECIALIZE modifyWithPtr :: BTree Word32 Int -> Word32 -> (Either r (Ptr Int -> Int -> IO r)) -> (Ptr Int -> Int -> IO (r,Decision)) -> IO (r, BTree Word32 Int) #-}
--- {-# SPECIALIZE modifyWithPtr :: BTree Int64 Int -> Int64 -> (Either r (Ptr Int -> Int -> IO r)) -> (Ptr Int -> Int -> IO (r,Decision)) -> IO (r, BTree Int64 Int) #-}
+{-# INLINE inlineModifyWithM #-}
+inlineModifyWithM :: forall k v a. (Ord k, Storable k, Initialize v)
+  => BTree k v 
+  -> k
+  -> (v -> IO (a, v)) -- ^ value modification, happens for newly inserted elements and for previously existing elements
+  -> IO (a, BTree k v)
+inlineModifyWithM bt k alter = do
+  (a, bt') <- inlineModifyWithPtr bt k
+    (Right (\ptr ix -> do
+      (a,v') <- alter =<< peekElemOff ptr ix
+      pokeElemOff ptr ix v'
+      return a
+    ))
+    (\ptr ix -> do
+      (a,v') <- alter =<< peekElemOff ptr ix
+      pokeElemOff ptr ix v'
+      return (a,Keep)
+    )
+  return (a,bt')
+
+{-# NOINLINE modifyWithPtr #-}
 modifyWithPtr :: forall k v r. (Ord k, Storable k, Initialize v)
   => BTree k v 
   -> k
   -> (Either r (Ptr v -> Int -> IO r)) -- ^ modifications to newly inserted value
   -> (Ptr v -> Int -> IO (r,Decision)) -- ^ modification to value if key is found
   -> IO (r, BTree k v)
-modifyWithPtr (BTree !height !root) !k !mpostInitializeElemOff alterElemOff = do
+modifyWithPtr a b c d = inlineModifyWithPtr a b c d
+
+{-# INLINE inlineModifyWithPtr #-}
+inlineModifyWithPtr :: forall k v r. (Ord k, Storable k, Initialize v)
+  => BTree k v 
+  -> k
+  -> (Either r (Ptr v -> Int -> IO r)) -- ^ modifications to newly inserted value
+  -> (Ptr v -> Int -> IO (r,Decision)) -- ^ modification to value if key is found
+  -> IO (r, BTree k v)
+inlineModifyWithPtr (BTree !height !root) !k !mpostInitializeElemOff alterElemOff = do
   !ins <- go height root
   case ins of
     Ok !r -> return (r, BTree height root)

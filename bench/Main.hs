@@ -23,7 +23,7 @@ import Data.Int
 
 -- this specialization does not seem to work.
 -- relying on specialize pragmas is the worst.
-{-# SPECIALIZE BTS.modifyWithPtr :: BTS.BTree Int Int -> Int -> (Either () (Ptr Int -> Int -> IO ())) -> (Ptr Int -> Int -> IO ((),BTS.Decision)) -> IO ((), BTS.BTree Int Int) #-}
+-- {-# SPECIALIZE BTS.modifyWithPtr :: BTS.BTree Int Int -> Int -> (Either () (Ptr Int -> Int -> IO ())) -> (Ptr Int -> Int -> IO ((),BTS.Decision)) -> IO ((), BTS.BTree Int Int) #-}
 -- {-# SPECIALIZE BTC.modifyWithM :: BTC.Context RealWorld c -> BTC.BTree RealWorld Int Int c -> Int -> (Maybe Int -> IO Int) -> IO (Int, BTC.BTree RealWorld Int Int c) #-}
 
 main :: IO ()
