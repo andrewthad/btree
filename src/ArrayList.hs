@@ -5,8 +5,6 @@
 {-# LANGUAGE MagicHash #-}
 {-# LANGUAGE UnboxedTuples #-}
 
-{-# OPTIONS_GHC -Wall -O2 #-}
-
 module ArrayList
   ( ArrayList
   , size
@@ -52,11 +50,13 @@ data ArrayList a = ArrayList
 instance Storable (ArrayList a) where
   sizeOf _ = wordSz * 4
   alignment _ = wordSz
+  {-# INLINE peek #-}
   peek ptr = ArrayList
     <$> peek (castPtr ptr)
     <*> peek (plusPtr ptr wordSz)
     <*> peek (plusPtr ptr (wordSz + wordSz))
     <*> peek (plusPtr ptr (wordSz + wordSz + wordSz))
+  {-# INLINE poke #-}
   poke ptr (ArrayList a b c d) = do
     poke (castPtr ptr) a
     poke (plusPtr ptr wordSz) b
@@ -64,6 +64,7 @@ instance Storable (ArrayList a) where
     poke (plusPtr ptr (wordSz + wordSz + wordSz)) d
 
 instance Storable a => Initialize (ArrayList a) where
+  {-# INLINE initialize #-}
   initialize ptr = do
     poke (castPtr ptr) (0 :: Int)
     poke (plusPtr ptr wordSz) (0 :: Int)
@@ -109,6 +110,7 @@ pushR (ArrayList start len bufLen ptr) a = if start + len < bufLen
         poke (advancePtr newPtr len) a
         return (ArrayList 0 (len + 1) (bufLen * 2) newPtr)
 
+{-# INLINE pushArrayR #-}
 pushArrayR :: forall a. (Storable a, Prim a) => ArrayList a -> PrimArray a -> IO (ArrayList a)
 pushArrayR (ArrayList start len bufLen ptr) as =
   -- I think this should actually be less than or equal to
@@ -148,6 +150,7 @@ popL xs@(ArrayList start len bufLen ptr)
       newArrList <- minimizeMemory (ArrayList (start + 1) (len - 1) bufLen ptr)
       return (newArrList, Just a)
 
+{-# INLINE dropWhileL #-}
 dropWhileL :: forall a. Storable a
   => ArrayList a
   -> (a -> IO Bool) -- ^ predicate
@@ -166,7 +169,7 @@ dropWhileL (ArrayList start len bufLen ptr) p = do
   newArrList <- minimizeMemory $ ArrayList (start + dropped) (len - dropped) bufLen ptr
   return (newArrList,dropped)
 
-{-# INLINABLE dropWhileScanL #-}
+{-# INLINE dropWhileScanL #-}
 dropWhileScanL :: forall a b. Storable a
   => ArrayList a
   -> b
@@ -186,6 +189,7 @@ dropWhileScanL (ArrayList start len bufLen ptr) b0 p = do
   newArrList <- minimizeMemory $ ArrayList (start + dropped) (len - dropped) bufLen ptr
   return (newArrList,dropped,b')
 
+{-# INLINE dropScanL #-}
 dropScanL :: forall a b. Storable a
   => ArrayList a
   -> Int
@@ -205,11 +209,13 @@ dropScanL (ArrayList start len bufLen ptr) n b0 p = do
   newArrList <- minimizeMemory $ ArrayList (start + m) (len - m) bufLen ptr
   return (newArrList,b')
 
+{-# INLINE dropL #-}
 dropL :: forall a. Storable a => ArrayList a -> Int -> IO (ArrayList a)
 dropL (ArrayList start len bufLen ptr) n = do
   let m = min n len
   minimizeMemory $ ArrayList (start + m) (len - m) bufLen ptr
 
+{-# INLINE minimizeMemory #-}
 minimizeMemory :: forall a. Storable a => ArrayList a -> IO (ArrayList a)
 minimizeMemory xs@(ArrayList start len bufLen ptr)
     -- we do not drop below a certain size, since then we would
