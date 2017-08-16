@@ -305,9 +305,11 @@ maxSize = 4096 - 2 * sizeOf (undefined :: Int)
 -- maxSize = 200
 
 -- not actually sure if this is really correct.
+{-# INLINE calcBranchDegree #-}
 calcBranchDegree :: forall k v. (Storable k, Storable v) => Ptr (Node k v) -> Int
 calcBranchDegree _ = calcBranchDegreeInt (sizeOf (undefined :: k)) (alignment (undefined :: k))
 
+{-# INLINE calcBranchDegreeInt #-}
 calcBranchDegreeInt :: Int -> Int -> Int
 calcBranchDegreeInt keySz keyAlignment = 
   let space = maxSize - max (sizeOf (undefined :: Int)) keyAlignment - sizeOf (undefined :: Ptr a)
@@ -317,12 +319,14 @@ calcBranchDegreeInt keySz keyAlignment =
 -- not actually sure if this is really correct. need to think about this math
 -- a little more. Or I guess I could write something that does a brute force
 -- consideration of all the possible sizes and alignment. That would convince me.
+{-# INLINE calcChildDegree #-}
 calcChildDegree :: forall k v. (Storable k, Storable v) => Ptr (Node k v) -> Int
 calcChildDegree _ = calcChildDegreeInt
   (sizeOf (undefined :: k))
   (alignment (undefined :: k))
   (sizeOf (undefined :: v))
 
+{-# INLINE calcChildDegreeInt #-}
 calcChildDegreeInt :: Int -> Int -> Int -> Int
 calcChildDegreeInt keySz keyAlignment valueSz = 
   let space = maxSize - max (sizeOf (undefined :: Int)) keyAlignment - valueSz
@@ -735,6 +739,7 @@ inlineModifyWithPtr (BTree !height !root) !k !mpostInitializeElemOff alterElemOf
 -- caller of this function must ensure in advance that
 -- the arrays will end up being appropriately sized
 -- after the balancing.
+{-# INLINE balanceArrays #-}
 balanceArrays :: (Storable k, Storable v) => Arr k -> Arr v -> Int -> Arr k -> Arr v -> Int -> IO (Int,Int)
 balanceArrays arrA valA szA arrB valB szB = do
   let newSzA = half (szA + szB)
@@ -757,12 +762,14 @@ balanceArrays arrA valA szA arrB valB szB = do
 -- After this operation, all of the values are in the first
 -- provided array. The second one should be considered unusable
 -- and it should be freed from memory soon.
+{-# INLINE mergeIntoLeft #-}
 mergeIntoLeft :: (Storable k, Storable v)
   => Arr k -> Arr v -> Int -> Arr k -> Arr v -> Int -> IO ()
 mergeIntoLeft arrA valA szA arrB valB szB = do
   copyArr arrA szA arrB 0 szB
   copyArr valA szA valB 0 szB
 
+{-# INLINE copyArr #-}
 copyArr :: forall a. Storable a
   => Arr a -- ^ dest
   -> Int -- ^ dest offset
@@ -775,6 +782,7 @@ copyArr (Arr dest) doff (Arr src) soff len = moveArray
   (advancePtr src soff)
   len
 
+{-# INLINE insertArr #-}
 insertArr :: Storable a
   => Int -- ^ Size of the original array
   -> Int -- ^ Index
@@ -818,7 +826,7 @@ insertInitArr !sz !i !arr@(Arr ptr0) f = do
 -- | This lookup is O(log n). It provides the index of the
 --   first element greater than the argument.
 --   Precondition, the array provided is sorted low to high.
-{-# INLINABLE findIndexOfGtElem #-}
+{-# INLINE findIndexOfGtElem #-}
 findIndexOfGtElem :: (Ord a, Storable a) => Arr a -> a -> Int -> IO Int
 findIndexOfGtElem v needle sz = go 0 (sz - 1)
   where
@@ -839,6 +847,7 @@ findIndexOfGtElem v needle sz = go 0 (sz - 1)
 -- * in the inclusive range [0,sz - 1], indicates a match
 -- * a negative number x, indicates that the first greater
 --   element is found at index ((negate x) - 1)
+{-# INLINE findIndex #-}
 findIndex :: (Ord a, Storable a)
   => Arr a
   -> a
