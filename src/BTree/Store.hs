@@ -394,6 +394,7 @@ data Decision = Keep | Delete
 
 -- data Position = Next | Prev
 
+{-# INLINE modifyWithM_ #-}
 modifyWithM_ :: forall k v. (Ord k, Storable k, Initialize v)
   => BTree k v 
   -> k
@@ -405,6 +406,7 @@ modifyWithM_ bt k alter = do
     (\ptr ix -> peekElemOff ptr ix >>= alter >>= pokeElemOff ptr ix >>= \_ -> return ((),Keep))
   return bt'
 
+{-# INLINE modifyWithM #-}
 modifyWithM :: forall k v a. (Ord k, Storable k, Initialize v)
   => BTree k v 
   -> k

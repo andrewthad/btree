@@ -23,13 +23,13 @@ import Data.Int
 
 -- this specialization does not seem to work.
 -- relying on specialize pragmas is the worst.
--- {-# SPECIALIZE BTS.modifyWithPtr :: BTS.BTree Int Int -> Int -> (Either r (Ptr Int -> Int -> IO r)) -> (Ptr Int -> Int -> IO (r,BTS.Decision)) -> IO (r, BTS.BTree Int Int) #-}
+{-# SPECIALIZE BTS.modifyWithPtr :: BTS.BTree Int Int -> Int -> (Either () (Ptr Int -> Int -> IO ())) -> (Ptr Int -> Int -> IO ((),BTS.Decision)) -> IO ((), BTS.BTree Int Int) #-}
 -- {-# SPECIALIZE BTC.modifyWithM :: BTC.Context RealWorld c -> BTC.BTree RealWorld Int Int c -> Int -> (Maybe Int -> IO Int) -> IO (Int, BTC.BTree RealWorld Int Int c) #-}
 
 main :: IO ()
 main = do
   putStrLn "Starting benchmark suite"
-  let multiplier = 5
+  let multiplier = 20
   let total   = 200000 * multiplier
       range   = 1000000 * multiplier
       lookups = 100000 * multiplier
@@ -43,20 +43,20 @@ main = do
     , "0 to "
     , show (lookups - 1)
     ]
-  replicateM_ 1 $ do
-    buildStart <- getTime Monotonic
-    (b,ctx) <- onHeapBTree total range
-    buildEnd <- getTime Monotonic
-    performGC
-    start <- getTime Monotonic
-    x <- lookupMany lookups b ctx
-    end <- getTime Monotonic
-    putStrLn ("Accumulated sum (not a benchmark): " ++ show x)
-    putStrLn "On-heap tree, Amount of time taken to build: "
-    putStrLn (showTimeSpec (diffTimeSpec buildEnd buildStart))
-    putStrLn "On-heap tree, Amount of time taken for lookups: "
-    putStrLn (showTimeSpec (diffTimeSpec end start))
-    performGC
+  -- replicateM_ 1 $ do
+  --   buildStart <- getTime Monotonic
+  --   (b,ctx) <- onHeapBTree total range
+  --   buildEnd <- getTime Monotonic
+  --   performGC
+  --   start <- getTime Monotonic
+  --   x <- lookupMany lookups b ctx
+  --   end <- getTime Monotonic
+  --   putStrLn ("Accumulated sum (not a benchmark): " ++ show x)
+  --   putStrLn "On-heap tree, Amount of time taken to build: "
+  --   putStrLn (showTimeSpec (diffTimeSpec buildEnd buildStart))
+  --   putStrLn "On-heap tree, Amount of time taken for lookups: "
+  --   putStrLn (showTimeSpec (diffTimeSpec end start))
+  --   performGC
   BTS.with_ $ \b0 -> do
     buildStart <- getTime Monotonic
     b1 <- offHeapBTree b0 total range

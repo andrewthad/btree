@@ -1,6 +1,6 @@
 name: btree
 version: 0.3
-synopsis: B-Tree on the compact heap
+synopsis: B-Tree on Unmanaged Heap
 -- description:
 homepage: https://github.com/andrewthad/b-plus-tree#readme
 license: BSD3
@@ -15,6 +15,7 @@ cabal-version: >=1.10
 
 library
   hs-source-dirs: src
+  ghc-options: -O2 -fllvm -pgmlo opt-3.7 -pgmlc llc-3.7
   exposed-modules:
     BTree
     BTree.Store
@@ -49,6 +50,7 @@ test-suite test
 
 benchmark bench
   type: exitcode-stdio-1.0
+  ghc-options: -O2 -fllvm -pgmlo opt-3.7 -pgmlc llc-3.7
   build-depends:
       base
     , btree
