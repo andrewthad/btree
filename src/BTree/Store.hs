@@ -36,6 +36,7 @@ import Data.Bits
 import Data.Word
 import Data.Int
 import GHC.Ptr (Ptr(..))
+import GHC.Magic (inline)
 import qualified Data.Primitive.Addr as PA
 import qualified Foreign.Marshal.Alloc as FMA
 
@@ -855,11 +856,12 @@ findIndex :: (Ord a, Storable a)
   -> IO Int -- (Either Int Int)
 findIndex !marr !needle !sz = go 0
   where
+  {-# INLINE go #-}
   go :: Int -> IO Int
   go !i = if i < sz
     then do
       !a <- readArr marr i
-      case compare a needle of
+      case inline (compare a needle) of
         LT -> go (i + 1)
         EQ -> return i
         GT -> return (encodeGtIndex i)
