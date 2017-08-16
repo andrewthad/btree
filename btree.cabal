@@ -15,7 +15,7 @@ cabal-version: >=1.10
 
 library
   hs-source-dirs: src
-  ghc-options: -O2 -fllvm -pgmlo opt-3.7 -pgmlc llc-3.7
+  ghc-options: -O2 
   exposed-modules:
     BTree
     BTree.Store
@@ -50,7 +50,7 @@ test-suite test
 
 benchmark bench
   type: exitcode-stdio-1.0
-  ghc-options: -O2 -fllvm -pgmlo opt-3.7 -pgmlc llc-3.7
+  ghc-options: -O2 
   build-depends:
       base
     , btree
