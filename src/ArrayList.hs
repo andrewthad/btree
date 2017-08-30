@@ -38,9 +38,14 @@ import Data.Primitive hiding (sizeOf)
 import Data.Primitive.Types
 import Data.Bits (unsafeShiftR)
 import BTree.Store (Initialize(..),Deinitialize(..))
+import Control.Monad (when)
 import qualified Data.Primitive as PM
 import qualified Foreign.Marshal.Alloc as FMA
 
+-- Special value for Ptr: If the pointer is null, then
+-- it is understood that the ArrayList is of length 0.
+-- For such an ArrayList, it is understood that
+-- all of the fields should be 0.
 data ArrayList a = ArrayList
   {-# UNPACK #-} !Int -- start index (in elements)
   {-# UNPACK #-} !Int -- used length (in elements)
@@ -65,11 +70,7 @@ instance Storable (ArrayList a) where
 
 instance Storable a => Initialize (ArrayList a) where
   {-# INLINE initialize #-}
-  initialize ptr = do
-    poke (castPtr ptr) (0 :: Int)
-    poke (plusPtr ptr wordSz) (0 :: Int)
-    poke (plusPtr ptr (wordSz + wordSz)) initialSize
-    poke (plusPtr ptr (wordSz + wordSz + wordSz)) =<< FMA.mallocBytes (sizeOf (undefined :: a) * initialSize)
+  initialize (Ptr addr#) = setAddr (Addr addr#) 4 (0 :: Int)
 
 wordSz :: Int
 wordSz = sizeOf (undefined :: Int)
@@ -88,9 +89,7 @@ with f = do
   return a
 
 new :: forall a. Storable a => IO (ArrayList a)
-new = do
-  ptr <- FMA.mallocBytes (sizeOf (undefined :: a) * initialSize)
-  return (ArrayList 0 0 initialSize ptr)
+new = return (ArrayList 0 0 0 nullPtr)
 
 {-# INLINABLE pushR #-}
 pushR :: forall a. Storable a => ArrayList a -> a -> IO (ArrayList a)
@@ -99,6 +98,13 @@ pushR (ArrayList start len bufLen ptr) a = if start + len < bufLen
     poke (advancePtr ptr (start + len)) a
     return (ArrayList start (len + 1) bufLen ptr)
   else if
+    | len == 0 -> do
+        when (bufLen /= 0) (fail "ArrayList.pushR: invariant violated")
+        when (start /= 0) (fail "ArrayList.pushR: invariant violated")
+        when (ptr /= nullPtr) (fail "ArrayList.pushR: invariant violated")
+        ptr <- FMA.mallocBytes (sizeOf (undefined :: a) * initialSize)
+        poke ptr a
+        return (ArrayList 0 1 initialSize ptr)
     | len < half bufLen -> do
         moveArray ptr (advancePtr ptr start) len
         poke (advancePtr ptr len) a
@@ -121,6 +127,14 @@ pushArrayR (ArrayList start len bufLen ptr) as =
     else if
       -- this might give poor guarentees concerning worst
       -- case behaviors, but whatever for now.
+      | len == 0 -> do
+          when (bufLen /= 0) (fail "ArrayList.pushArrayR: invariant violated")
+          when (start /= 0) (fail "ArrayList.pushArrayR: invariant violated")
+          when (ptr /= nullPtr) (fail "ArrayList.pushArrayR: invariant violated")
+          let newBufLen = twiceUntilExceeds initialSize asLen
+          ptr <- FMA.mallocBytes (sizeOf (undefined :: a) * newBufLen)
+          copyPrimArrayToPtr ptr as 0 asLen
+          return (ArrayList 0 asLen newBufLen ptr)
       | len < half bufLen && asLen < half bufLen -> do
           moveArray ptr (advancePtr ptr start) len
           copyPrimArrayToPtr (advancePtr ptr len) as 0 asLen
@@ -218,8 +232,13 @@ dropL (ArrayList start len bufLen ptr) n = do
 {-# INLINE minimizeMemory #-}
 minimizeMemory :: forall a. Storable a => ArrayList a -> IO (ArrayList a)
 minimizeMemory xs@(ArrayList start len bufLen ptr)
-    -- we do not drop below a certain size, since then we would
-    -- end up doing frequent reallocations.
+    -- We do not drop below a certain size, since then we would
+    -- end up doing frequent reallocations. Although, once the size
+    -- reaches zero, we deallocate entirely since this can save a lot
+    -- of memory when we have many empty ArrayLists.
+  | len == 0 = do
+      FMA.free ptr
+      return (ArrayList 0 0 0 nullPtr)
   | bufLen <= initialSize = return xs
   | len < quarter bufLen = do
       newPtr <- FMA.mallocBytes (sizeOf (undefined :: a) * div bufLen 2)
