@@ -23,6 +23,7 @@ module BTree.Store
   , foldrWithKey
   , toAscList
   -- * Weird Operations
+  , index
   , indexNode
   -- * Force inlining
   , inlineModifyWithPtr
