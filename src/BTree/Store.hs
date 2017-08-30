@@ -22,6 +22,8 @@ module BTree.Store
   , modifyWithPtr
   , foldrWithKey
   , toAscList
+  -- * Weird Operations
+  , indexNode
   -- * Force inlining
   , inlineModifyWithPtr
   , inlineModifyWithM
@@ -364,6 +366,44 @@ lookup (BTree height rootNode) k = go height rootNode
         else do
           !v <- readArr values ix
           return (Just v)
+
+index :: forall k v. (Storable k, Storable v) => BTree k v -> (Int -> Int) -> Int -> IO v
+index (BTree height rootNode) f = go height rootNode
+  where
+  branchDegree :: Int
+  !branchDegree = calcBranchDegree rootNode
+  go :: Int -> Ptr (Node k v) -> Int -> IO v
+  go !n !ptrNode !k = if n > 0
+    then do
+      !sz <- readNodeSize ptrNode
+      let !ix = mod k sz
+      let !(KeysNodes keys nodes) = readNodeKeysNodes branchDegree ptrNode
+      !node <- readArr nodes ix
+      go (n - 1) node (f k)
+    else do
+      !sz <- readNodeSize ptrNode
+      let !(KeysValues keys !values) = readNodeKeysValues (calcChildDegree rootNode) ptrNode
+      readArr values (mod k sz)
+
+-- This function is only provided so that I can randomly choose
+-- a leaf of the B-Tree and garbage collect old things.
+indexNode :: forall k v. (Storable k, Storable v) => BTree k v -> (Int -> Int) -> Int -> IO (Ptr v, Int)
+indexNode (BTree height rootNode) f = go height rootNode
+  where
+  branchDegree :: Int
+  !branchDegree = calcBranchDegree rootNode
+  go :: Int -> Ptr (Node k v) -> Int -> IO (Ptr v, Int)
+  go !n !ptrNode !k = if n > 0
+    then do
+      !sz <- readNodeSize ptrNode
+      let !ix = mod k sz
+      let !(KeysNodes keys nodes) = readNodeKeysNodes branchDegree ptrNode
+      !node <- readArr nodes ix
+      go (n - 1) node (f k)
+    else do
+      !sz <- readNodeSize ptrNode
+      let !(KeysValues keys !values) = readNodeKeysValues (calcChildDegree rootNode) ptrNode
+      return (getArr values, sz)
 
 data Insert k v r
   = Ok !r
