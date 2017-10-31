@@ -149,6 +149,17 @@ instance Deinitialize Word16 where
   deinitializeElemOff _ _ = return ()
   deinitializeElems _ _ = return ()
 
+instance Initialize Word64 where
+  initialize _ = return ()
+  initializeElemOff _ _ = return ()
+  initializeElems _ _ = return ()
+
+instance Deinitialize Word64 where
+  deinitialize _ = return ()
+  deinitializeElemOff _ _ = return ()
+  deinitializeElems _ _ = return ()
+
+
 instance Initialize Word where
   initialize ptr = poke ptr (0 :: Word)
   initializeElemOff ptr off = pokeElemOff ptr off (0 :: Word)
@@ -173,7 +184,9 @@ ptrToAddr :: Ptr a -> PA.Addr
 ptrToAddr (Ptr x) = PA.Addr x
 
 instance Initialize Word32 where
-  initialize ptr = poke ptr (0 :: Word32)
+  initialize _ = return ()
+  initializeElemOff _ _ = return ()
+  initializeElems _ _ = return ()
 
 instance Deinitialize Word32 where
   deinitialize _ = return ()

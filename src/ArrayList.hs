@@ -240,7 +240,7 @@ minimizeMemory xs@(ArrayList start len bufLen ptr)
       FMA.free ptr
       return (ArrayList 0 0 0 nullPtr)
   | bufLen <= initialSize = return xs
-  | len < quarter bufLen = do
+  | len < eighth bufLen = do
       newPtr <- FMA.mallocBytes (sizeOf (undefined :: a) * div bufLen 2)
       moveArray newPtr (advancePtr ptr start) len
       FMA.free ptr
@@ -255,6 +255,14 @@ half x = unsafeShiftR x 1
 {-# INLINE quarter #-}
 quarter :: Int -> Int
 quarter x = unsafeShiftR x 2
+
+{-# INLINE eighth #-}
+eighth :: Int -> Int
+eighth x = unsafeShiftR x 3
+
+{-# INLINE sixteenth #-}
+sixteenth :: Int -> Int
+sixteenth x = unsafeShiftR x 4
 
 -- | This should not be used in production code.
 dumpList :: (Prim a, Storable a) => ArrayList a -> IO (ArrayList a, [a])
