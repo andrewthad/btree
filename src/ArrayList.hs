@@ -41,6 +41,7 @@ import BTree.Store (Initialize(..),Deinitialize(..))
 import Control.Monad (when)
 import qualified Data.Primitive as PM
 import qualified Foreign.Marshal.Alloc as FMA
+import qualified Foreign.Storable as FS
 
 -- Special value for Ptr: If the pointer is null, then
 -- it is understood that the ArrayList is of length 0.
@@ -73,7 +74,7 @@ instance Storable a => Initialize (ArrayList a) where
   initialize (Ptr addr#) = setAddr (Addr addr#) 4 (0 :: Int)
 
 wordSz :: Int
-wordSz = sizeOf (undefined :: Int)
+wordSz = PM.sizeOf (undefined :: Int)
   
 initialSize :: Int
 initialSize = 4
@@ -102,7 +103,7 @@ pushR (ArrayList start len bufLen ptr) a = if start + len < bufLen
         when (bufLen /= 0) (fail "ArrayList.pushR: invariant violated")
         when (start /= 0) (fail "ArrayList.pushR: invariant violated")
         when (ptr /= nullPtr) (fail "ArrayList.pushR: invariant violated")
-        ptr <- FMA.mallocBytes (sizeOf (undefined :: a) * initialSize)
+        ptr <- FMA.mallocBytes (FS.sizeOf (undefined :: a) * initialSize)
         poke ptr a
         return (ArrayList 0 1 initialSize ptr)
     | len < half bufLen -> do
@@ -110,7 +111,7 @@ pushR (ArrayList start len bufLen ptr) a = if start + len < bufLen
         poke (advancePtr ptr len) a
         return (ArrayList 0 (len + 1) bufLen ptr)
     | otherwise -> do
-        newPtr <- FMA.mallocBytes (sizeOf (undefined :: a) * bufLen * 2)
+        newPtr <- FMA.mallocBytes (FS.sizeOf (undefined :: a) * bufLen * 2)
         moveArray newPtr (advancePtr ptr start) len
         FMA.free ptr
         poke (advancePtr newPtr len) a
@@ -132,7 +133,7 @@ pushArrayR (ArrayList start len bufLen ptr) as =
           when (start /= 0) (fail "ArrayList.pushArrayR: invariant violated")
           when (ptr /= nullPtr) (fail "ArrayList.pushArrayR: invariant violated")
           let newBufLen = twiceUntilExceeds initialSize asLen
-          ptr <- FMA.mallocBytes (sizeOf (undefined :: a) * newBufLen)
+          ptr <- FMA.mallocBytes (FS.sizeOf (undefined :: a) * newBufLen)
           copyPrimArrayToPtr ptr as 0 asLen
           return (ArrayList 0 asLen newBufLen ptr)
       | len < half bufLen && asLen < half bufLen -> do
@@ -141,7 +142,7 @@ pushArrayR (ArrayList start len bufLen ptr) as =
           return (ArrayList 0 (len + asLen) bufLen ptr)
       | otherwise -> do
           let newBufLen = twiceUntilExceeds (2 * bufLen) (len + asLen)
-          newPtr <- FMA.mallocBytes (sizeOf (undefined :: a) * newBufLen)
+          newPtr <- FMA.mallocBytes (FS.sizeOf (undefined :: a) * newBufLen)
           moveArray newPtr (advancePtr ptr start) len
           FMA.free ptr
           copyPrimArrayToPtr (advancePtr newPtr len) as 0 asLen
@@ -241,7 +242,7 @@ minimizeMemory xs@(ArrayList start len bufLen ptr)
       return (ArrayList 0 0 0 nullPtr)
   | bufLen <= initialSize = return xs
   | len < eighth bufLen = do
-      newPtr <- FMA.mallocBytes (sizeOf (undefined :: a) * div bufLen 2)
+      newPtr <- FMA.mallocBytes (FS.sizeOf (undefined :: a) * div bufLen 2)
       moveArray newPtr (advancePtr ptr start) len
       FMA.free ptr
       return (ArrayList 0 len (div bufLen 2) newPtr)
