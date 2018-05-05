@@ -39,6 +39,7 @@ import Data.Primitive.Types
 import Data.Bits (unsafeShiftR)
 import BTree.Store (Initialize(..),Deinitialize(..))
 import Control.Monad (when)
+import Data.Primitive.Ptr (copyPtrToMutablePrimArray)
 import qualified Data.Primitive as PM
 import qualified Foreign.Marshal.Alloc as FMA
 import qualified Foreign.Storable as FS
