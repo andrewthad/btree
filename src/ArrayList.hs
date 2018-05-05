@@ -271,8 +271,16 @@ dumpList xs@(ArrayList _ len _ _) = do
   marr <- newPrimArray len
   newXs <- dump xs marr 0
   arr <- unsafeFreezePrimArray marr
-  return (newXs,primArrayToList len arr)
+  return (newXs,primArrayToListN len arr)
 
+primArrayToListN :: forall a. Prim a => Int -> PrimArray a -> [a]
+primArrayToListN len arr = go 0
+  where
+  go :: Int -> [a]
+  go !ix = if ix < len
+    then indexPrimArray arr ix : go (ix + 1)
+    else []
+ 
 -- | Deletes all elements from the linked list, copying them
 --   into the buffer specified by the pointer. Returns an
 --   empty linked list.
@@ -302,7 +310,7 @@ showDebug (ArrayList start len _ ptr) = do
   marr <- newPrimArray len
   copyPtrToMutablePrimArray marr 0 (plusPtr ptr (start * PM.sizeOf (undefined :: a))) len
   arr <- unsafeFreezePrimArray marr
-  return (show (primArrayToList len arr :: [a]))
+  return (show (primArrayToListN len arr :: [a]))
 
 clear :: Storable a => ArrayList a -> IO (ArrayList a)
 clear xs@(ArrayList _ len _ _) = dropL xs len
