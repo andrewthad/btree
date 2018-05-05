@@ -273,15 +273,6 @@ dumpList xs@(ArrayList _ len _ _) = do
   arr <- unsafeFreezePrimArray marr
   return (newXs,primArrayToList len arr)
 
-primArrayToList :: forall a. Prim a => Int -> PrimArray a -> [a]
-primArrayToList len arr = go 0
-  where
-  go :: Int -> [a]
-  go !ix = if ix < len
-    then indexPrimArray arr ix : go (ix + 1)
-    else []
- 
-
 -- | Deletes all elements from the linked list, copying them
 --   into the buffer specified by the pointer. Returns an
 --   empty linked list.
