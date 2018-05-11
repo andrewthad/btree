@@ -2,7 +2,7 @@ name: btree
 version: 0.3
 synopsis: B-Tree on Unmanaged Heap
 -- description:
-homepage: https://github.com/andrewthad/b-plus-tree#readme
+homepage: https://github.com/andrewthad/btree
 license: BSD3
 license-file: LICENSE
 author: Andrew Martin
