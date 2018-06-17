@@ -1,3 +1,4 @@
+.ghc*
 *.aux
 cabal-dev
 .cabal-sandbox
