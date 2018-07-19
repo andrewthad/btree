@@ -22,9 +22,9 @@ library
     BTree.Linear
     ArrayList
   build-depends:
-      base >= 4.9 && < 4.11
+      base >= 4.9 && < 5
     , ghc-prim >= 0.5 && < 0.6
-    , primitive >= 0.6.1 && < 0.7
+    , primitive >= 0.6.4 && < 0.7
   default-language: Haskell2010
 
 test-suite test
