@@ -37,6 +37,7 @@ import Foreign.Ptr
 import Control.Monad.Random.Strict hiding (fromList)
 import Data.Bifunctor
 import GHC.Exts (fromList)
+import Control.Monad.ST (ST, runST)
 
 import qualified Data.List as L
 import qualified Data.List.NonEmpty as NE
@@ -46,6 +47,14 @@ import qualified BTree.Store as BTS
 import qualified ArrayList as AL
 import qualified Data.Set as S
 import qualified Data.Primitive.PrimArray as P
+
+singletonPrimArray :: forall a. Prim a => a -> P.PrimArray a
+singletonPrimArray x = runST sing where
+  sing :: forall s. ST s (P.PrimArray a)
+  sing = do
+    arr <- P.newPrimArray 1
+    P.writePrimArray arr 0 x
+    P.unsafeFreezePrimArray arr
 
 main :: IO ()
 main = do
@@ -173,7 +182,7 @@ arrayListDropWhile xs = unsafePerformIO $ AL.with $ \a0 ->
 arrayListInsertArray :: forall a. (Hashable a, Eq a, Show a, Prim a, Storable a)
   => [a] -> Either String String
 arrayListInsertArray xs = unsafePerformIO $ AL.with $ \a0 -> do
-  a1 <- foldlM AL.pushArrayR a0 (map P.singletonPrimArray xs)
+  a1 <- foldlM AL.pushArrayR a0 (map singletonPrimArray xs)
   let go :: AL.ArrayList a -> IO (AL.ArrayList a, [a])
       go al = do
         (al',m) <- AL.popL al
