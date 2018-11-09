@@ -1,5 +1,5 @@
 name: btree
-version: 0.3
+version: 0.4.0
 synopsis: B-Tree on Unmanaged Heap
 -- description:
 homepage: https://github.com/andrewthad/btree
@@ -8,7 +8,7 @@ license-file: LICENSE
 author: Andrew Martin
 maintainer: andrew.thaddeus@gmail.com
 copyright: 2017 Andrew Martin
-category: Web
+category: Data
 build-type: Simple
 extra-source-files: README.md
 cabal-version: >=1.10
@@ -20,7 +20,6 @@ library
     BTree
     BTree.Store
     BTree.Linear
-    ArrayList
   build-depends:
       base >= 4.9 && < 5
     , ghc-prim >= 0.5 && < 0.6

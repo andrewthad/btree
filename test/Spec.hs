@@ -44,7 +44,6 @@ import qualified Data.List.NonEmpty as NE
 import qualified BTree as B
 import qualified BTree.Linear as BTL
 import qualified BTree.Store as BTS
-import qualified ArrayList as AL
 import qualified Data.Set as S
 import qualified Data.Primitive.PrimArray as P
 
@@ -121,18 +120,6 @@ smallcheckTests f =
   -- , testPropDepth 1050 "large maps with Word16" (over word16SeriesSingles f)
   ]
 
-arraylistTests :: [TestTree]
-arraylistTests =
-  [ testPropDepth 10 "arraylist inserts followed by dump (short)" (over word16Series arrayListInsertions)
-  , testPropDepth 150 "arraylist inserts followed by dump (long)" (over word32Series arrayListInsertions)
-  , testPropDepth 150 "arraylist inserts followed by repeated pop (long)" (over word32Series pushPop)
-  , testPropDepth 50 "arraylist dropWhile" (over word32Series arrayListDropWhile)
-  , testPropDepth 50 "insert array" (over word32Series arrayListInsertArray)
-  , testPropDepth 100 "insert big array" (over word32Series arrayListInsertBigArray)
-  , testPropDepth 100 "insert big arrays" (over word32Series arrayListInsertArrays)
-  -- , testPropDepth 150 "arraylist push, pop, twice (long)" (over word32Series pushPopTwice)
-  ]
-
 scProps :: TestTree
 scProps = testGroup "smallcheck"
   [ testGroup "unmanaged heap" (smallcheckTests orderingStorable)
@@ -141,89 +128,7 @@ scProps = testGroup "smallcheck"
   -- , testGroup "unmanaged heap nested diverse" (smallcheckTests orderingNestedDiverse)
   -- deletion does not work yet
   -- , testGroup "unmanaged heap deletions" (smallcheckTests deletionStorable)
-  , testGroup "arraylist" arraylistTests
   ]
-
-arrayListInsertions :: (Eq a, Show a, Prim a, Storable a) => [a] -> Either String String
-arrayListInsertions xs = unsafePerformIO $ AL.with $ \a0 -> do
-  a1 <- foldlM AL.pushR a0 xs
-  (a2,ys) <- AL.dumpList a1
-  return $ (,) a2 $ if xs == ys
-    then Right "good"
-    else Left ("expected " ++ show xs ++ " but got " ++ show ys)
-
-pushPop :: forall a. (Eq a, Show a, Prim a, Storable a) => [a] -> Either String String
-pushPop xs = unsafePerformIO $ AL.with $ \a0 -> do
-  a1 <- foldlM AL.pushR a0 xs
-  let go :: AL.ArrayList a -> IO (AL.ArrayList a, [a])
-      go al = do
-        (al',m) <- AL.popL al
-        case m of
-          Nothing -> return (al',[])
-          Just a -> fmap (second (a:)) (go al')
-  (a2,ys) <- go a1
-  return $ (,) a2 $ if xs == ys
-    then Right "good"
-    else Left $ "expected " ++ show xs ++ " but got " ++ show ys
-
-arrayListDropWhile :: forall a. (Hashable a, Eq a, Show a, Prim a, Storable a) => [a] -> Either String String
-arrayListDropWhile xs = unsafePerformIO $ AL.with $ \a0 ->
-  case deterministicShuffle xs of
-    [] -> return (a0, Right "good")
-    x : _ -> do
-     a1 <- foldlM AL.pushR a0 xs
-     (a2,_) <- AL.dropWhileL a1 (\y -> return (y /= x))
-     (a3,ys) <- AL.dumpList a2
-     let expected = L.dropWhile (/= x) xs
-     return $ (,) a3 $ if expected == ys
-       then Right "good"
-       else Left ("expected " ++ show expected ++ " but got " ++ show ys ++ " using pivot of " ++ show x)
-  
-arrayListInsertArray :: forall a. (Hashable a, Eq a, Show a, Prim a, Storable a)
-  => [a] -> Either String String
-arrayListInsertArray xs = unsafePerformIO $ AL.with $ \a0 -> do
-  a1 <- foldlM AL.pushArrayR a0 (map singletonPrimArray xs)
-  let go :: AL.ArrayList a -> IO (AL.ArrayList a, [a])
-      go al = do
-        (al',m) <- AL.popL al
-        case m of
-          Nothing -> return (al',[])
-          Just a -> fmap (second (a:)) (go al')
-  (a2,ys) <- go a1
-  return $ (,) a2 $ if xs == ys
-    then Right "good"
-    else Left $ "expected " ++ show xs ++ " but got " ++ show ys
-  
-arrayListInsertBigArray :: forall a. (Hashable a, Eq a, Show a, Prim a, Storable a)
-  => [a] -> Either String String
-arrayListInsertBigArray xs = unsafePerformIO $ AL.with $ \a0 -> do
-  a1 <- AL.pushArrayR a0 (fromList xs)
-  let go :: AL.ArrayList a -> IO (AL.ArrayList a, [a])
-      go al = do
-        (al',m) <- AL.popL al
-        case m of
-          Nothing -> return (al',[])
-          Just a -> fmap (second (a:)) (go al')
-  (a2,ys) <- go a1
-  return $ (,) a2 $ if xs == ys
-    then Right "good"
-    else Left $ "expected " ++ show xs ++ " but got " ++ show ys
-
-arrayListInsertArrays :: forall a. (Hashable a, Eq a, Show a, Prim a, Storable a)
-  => [a] -> Either String String
-arrayListInsertArrays xs = unsafePerformIO $ AL.with $ \a0 -> do
-  a1 <- AL.pushArrayR a0 (fromList xs)
-  a2 <- AL.pushArrayR a1 (fromList xs)
-  let go :: AL.ArrayList a -> IO (AL.ArrayList a, [a])
-      go al = do
-        (al',m) <- AL.popL al
-        case m of
-          Nothing -> return (al',[])
-          Just a -> fmap (second (a:)) (go al')
-  (a3,zs) <- go a2
-  return $ (,) a3 $ if zs == (xs ++ xs)
-    then Right "good"
-    else Left $ "expected " ++ show (xs ++ xs) ++ " but got " ++ show zs
 
 unitTests :: TestTree
 unitTests = testGroup "Unit tests"
@@ -263,12 +168,6 @@ unitTests = testGroup "Unit tests"
           xs' = map (\x -> (x,x)) xs
       actual <- return (runST (B.fromList (B.Context (BTL.Context 4)) xs' >>= B.toAscList))
       actual @?= S.toAscList (S.fromList xs')
-  , testCase "ArrayList dropWhileScanL on empty" $ do
-      xs <- AL.new
-      (xs',n,r) <- AL.dropWhileScanL xs (55 :: Word32) (\b a -> return (True,b + a))
-      n @?= 0
-      r @?= 55
-      AL.free xs'
   ]
 
 testPropDepth :: Testable IO a => Int -> String -> a -> TestTree
@@ -343,21 +242,6 @@ ordering degree xs' =
     then Right "good"
     else Left (notice (show expected) (show actual) layout)
 
--- orderingCompact :: (Show n, Ord n, Prim n)
---   => Int -- ^ degree of b-tree
---   -> [Positive n] -- ^ values to insert
---   -> Either Reason Reason
--- orderingCompact degree xs' = 
---   let xs = map getPositive xs'
---       expected = map (\x -> (x,x)) $ S.toAscList $ S.fromList xs
---       (actual,layout) = runST $ withToken $ \c -> do
---         m0 <- BTC.new c degree
---         m1 <- foldlM (\ !m !x -> BTC.insert c m x x) m0 xs
---         (,) <$> BTC.toAscList m1 <*> BTC.debugMap m1
---   in if actual == expected
---     then Right "good"
---     else Left (notice (show expected) (show actual) layout)
-
 orderingStorable :: (Hashable x, Show x, Eq x, Ord x, Storable x, BTS.Initialize x, BTS.Deinitialize x)
   => [x] -- ^ values to insert
   -> Either Reason Reason
@@ -371,23 +255,6 @@ orderingStorable xs =
               else Left (notice (show expected) (show actual) "layout not available")
         return (e,m1)
    in result
-
--- this does all insertions followed by all deletions
--- deletionStorable :: KnownNat n
---   => [Padded n] -- ^ values to insert
---   -> Either Reason Reason
--- deletionStorable xs = 
---   let expected = map (\x -> (x,x)) $ S.toAscList $ S.fromList xs
---       result = unsafePerformIO $ BTS.with $ \m0 -> do
---         m1 <- foldlM (\ !m !x -> BTS.insert m x x) m0 xs
---         m2 <- foldlM (\ !m !x -> BTS.delete m x) m1 (deterministicShuffle xs)
---         actual <- BTS.toAscList m2
---         let e = if actual == []
---               then Right "good"
---               else Left (notice "empty list" (show actual) "layout not available")
---         return (e,m2)
---    in result
-
 
 -- let us begin the most dangerous game.
 orderingNested :: (Bounded x, Integral x, Hashable x, Show x, Eq x, Ord x, Storable x, BTS.Initialize x, BTS.Deinitialize x)
