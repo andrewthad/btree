@@ -30,6 +30,7 @@ module BTree.Store
   , inlineModifyWithM
   ) where
 
+import Initialize
 import Prelude hiding (lookup)
 import Foreign.Storable
 import Foreign.Ptr
@@ -48,46 +49,6 @@ data BTree k v = BTree
   !(Ptr (Node k v)) -- root node
 
 data Node k v
-
-class Storable a => Initialize a where
-  initialize :: Ptr a -> IO ()
-  -- ^ Initialize the memory at a pointer. An implementation
-  --   of this function may do nothing, or if the data contains
-  --   more pointers, @initialize@ may allocate additional memory.
-  initializeElemOff :: Ptr a -> Int -> IO ()
-  -- ^ Can be overridden for efficiency
-  initializeElemOff ptr ix = do
-    initialize (plusPtr ptr (ix * sizeOf (undefined :: a)) :: Ptr a)
-  initializeElems :: Ptr a -> Int -> IO ()
-  -- ^ Initialize a pointer representing an array with
-  --   a given number of elements. This has a default implementation
-  --   but may be overriden for efficency.
-  initializeElems ptr n = go 0
-    where
-    go !i = if i < n
-      then do
-        initialize (plusPtr ptr (i * sizeOf (undefined :: a)) :: Ptr a)
-        go (i + 1)
-      else return ()
-
-class Storable a => Deinitialize a where
-  deinitialize :: Ptr a -> IO ()
-  deinitializeElemOff :: Ptr a -> Int -> IO ()
-  -- ^ Can be overridden for efficiency
-  deinitializeElemOff ptr ix =
-    deinitialize (plusPtr ptr (ix * sizeOf (undefined :: a)) :: Ptr a)
-  -- ^ Free any memory in the data structure pointed to.
-  deinitializeElems :: Ptr a -> Int -> IO ()
-  -- ^ Free any memory pointed to by elements of the array.
-  --   This has a default implementation
-  --   but may be overriden for efficency.
-  deinitializeElems ptr n = go 0
-    where
-    go !i = if i < n
-      then do
-        deinitialize (plusPtr ptr (i * sizeOf (undefined :: a)) :: Ptr a)
-        go (i + 1)
-      else return ()
 
 instance Storable (BTree k v) where
   sizeOf _ = 2 * sizeOf (undefined :: Int)
@@ -116,103 +77,8 @@ instance (Storable k, Deinitialize v) => Deinitialize (BTree k v) where
     bt <- peek ptr
     free bt
 
-newtype Uninitialized a = Uninitialized a
-  deriving (Storable)
-
-instance Storable a => Initialize (Uninitialized a) where
-  initialize _ = return ()
-  initializeElemOff _ _ = return ()
-  initializeElems _ _ = return ()
-
-instance Storable a => Deinitialize (Uninitialized a) where
-  deinitialize _ = return ()
-  deinitializeElemOff _ _ = return ()
-  deinitializeElems _ _ = return ()
-
-instance Initialize Word8 where
-  initialize _ = return ()
-  initializeElemOff _ _ = return ()
-  initializeElems _ _ = return ()
-
-instance Deinitialize Word8 where
-  deinitialize _ = return ()
-  deinitializeElemOff _ _ = return ()
-  deinitializeElems _ _ = return ()
-
-instance Initialize Word16 where
-  initialize _ = return ()
-  initializeElemOff _ _ = return ()
-  initializeElems _ _ = return ()
-
-instance Deinitialize Word16 where
-  deinitialize _ = return ()
-  deinitializeElemOff _ _ = return ()
-  deinitializeElems _ _ = return ()
-
-instance Initialize Word64 where
-  initialize _ = return ()
-  initializeElemOff _ _ = return ()
-  initializeElems _ _ = return ()
-
-instance Deinitialize Word64 where
-  deinitialize _ = return ()
-  deinitializeElemOff _ _ = return ()
-  deinitializeElems _ _ = return ()
-
-
-instance Initialize Word where
-  initialize ptr = poke ptr (0 :: Word)
-  initializeElemOff ptr off = pokeElemOff ptr off (0 :: Word)
-  initializeElems ptr elemLen = PA.setAddr (ptrToAddr ptr) elemLen (0 :: Word)
-
-instance Deinitialize Word where
-  deinitialize _ = return ()
-  deinitializeElemOff _ _ = return ()
-  deinitializeElems _ _ = return ()
-
-instance Initialize Int where
-  initialize ptr = poke ptr (0 :: Int)
-  initializeElemOff ptr off = pokeElemOff ptr off (0 :: Int)
-  initializeElems ptr elemLen = PA.setAddr (ptrToAddr ptr) elemLen (0 :: Int)
-
-instance Initialize Int64 where
-  initialize ptr = poke ptr (0 :: Int64)
-  initializeElemOff ptr off = pokeElemOff ptr off (0 :: Int64)
-  initializeElems ptr elemLen = PA.setAddr (ptrToAddr ptr) elemLen (0 :: Int64)
-
 ptrToAddr :: Ptr a -> PA.Addr
 ptrToAddr (Ptr x) = PA.Addr x
-
-instance Initialize Word32 where
-  initialize _ = return ()
-  initializeElemOff _ _ = return ()
-  initializeElems _ _ = return ()
-
-instance Deinitialize Word32 where
-  deinitialize _ = return ()
-  deinitializeElemOff _ _ = return ()
-  deinitializeElems _ _ = return ()
-
-instance Deinitialize Int where
-  deinitialize _ = return ()
-  deinitializeElemOff _ _ = return ()
-  deinitializeElems _ _ = return ()
-
-instance Deinitialize Int64 where
-  deinitialize _ = return ()
-  deinitializeElemOff _ _ = return ()
-  deinitializeElems _ _ = return ()
-
-instance Initialize Char where
-  initialize _ = return ()
-  initializeElemOff _ _ = return ()
-  initializeElems _ _ = return ()
-
-instance Deinitialize Char where
-  deinitialize _ = return ()
-  deinitializeElemOff _ _ = return ()
-  deinitializeElems _ _ = return ()
-
 
 newtype Arr a = Arr { getArr :: Ptr a }
 data KeysValues k v = KeysValues !(Arr k) !(Arr v)
